@@ -1,0 +1,24 @@
+# Secrets e variáveis de ambiente — NUNCA commitar
+.env
+.env.local
+.env.production
+*.env
+
+# Supabase local (gerado pelo supabase start)
+.supabase/
+
+# Node
+node_modules/
+
+# macOS
+.DS_Store
+
+# Backups de banco (contêm dados reais)
+backup_data_*.sql
+
+# Logs locais
+*.log
+
+# Chaves de service account Google
+*service_account*.json
+*credentials*.json
