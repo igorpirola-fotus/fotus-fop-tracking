@@ -54,6 +54,7 @@ DROP POLICY IF EXISTS "service_role_only" ON gmb_reviews;
 CREATE POLICY "service_role_only" ON gmb_reviews FOR ALL USING (auth.role() = 'service_role');
 
 -- Trigger de updated_at
+DROP TRIGGER IF EXISTS trg_gmb_reviews_updated_at ON gmb_reviews;
 CREATE TRIGGER trg_gmb_reviews_updated_at
   BEFORE UPDATE ON gmb_reviews
   FOR EACH ROW EXECUTE FUNCTION update_updated_at();
