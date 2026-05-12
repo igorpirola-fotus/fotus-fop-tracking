@@ -50,6 +50,7 @@ CREATE INDEX IF NOT EXISTS idx_gmb_integrador ON gmb_reviews(integrador_id) WHER
 
 -- RLS
 ALTER TABLE gmb_reviews ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "service_role_only" ON gmb_reviews;
 CREATE POLICY "service_role_only" ON gmb_reviews FOR ALL USING (auth.role() = 'service_role');
 
 -- Trigger de updated_at
