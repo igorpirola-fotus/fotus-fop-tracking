@@ -45,6 +45,8 @@
 
 ## 3. Tabelas de Códigos
 
+> 📋 Os códigos canônicos agora vivem nas tabelas `public.codigos_*` do Supabase do FOP. Espelho gerado e legível: [`09-codigos.generated.md`](09-codigos.generated.md) (via `scripts/gen-doc09.ts`). Para mudar um código, edite a TABELA e rode o script — as tabelas abaixo são referência humana.
+
 ### 3.1 CANAL
 
 | Código | Plataforma |
