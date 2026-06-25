@@ -1,0 +1,498 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Fotus · UTM Builder</title>
+  <style>
+    /* ── Reset & Base ── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:        #0a0a0b;
+      --card:      #16161a;
+      --border:    #2a2a32;
+      --accent:    #f59e0b;
+      --accent-dim:#b4760d;
+      --text:      #e2e2e6;
+      --muted:     #8a8a96;
+      --error:     #ef4444;
+      --success:   #22c55e;
+      --disabled:  #3a3a42;
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Inter', system-ui, -apple-system, sans-serif;
+      font-size: 15px;
+      line-height: 1.6;
+      min-height: 100vh;
+      padding: 2rem 1rem 4rem;
+    }
+
+    /* ── Layout ── */
+    .container { max-width: 760px; margin: 0 auto; }
+
+    /* ── Header ── */
+    .header { margin-bottom: 2.5rem; }
+    .header__kicker {
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.12em;
+      color: var(--accent);
+      text-transform: uppercase;
+      margin-bottom: 0.5rem;
+    }
+    .header__title {
+      font-size: 2rem;
+      font-weight: 700;
+      line-height: 1.15;
+      margin-bottom: 0.5rem;
+    }
+    .header__subtitle {
+      color: var(--muted);
+      font-size: 0.95rem;
+      max-width: 560px;
+    }
+
+    /* ── Nome (persisted) ── */
+    .nome-bar {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      margin-bottom: 2rem;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 0.75rem 1rem;
+    }
+    .nome-bar label { font-size: 0.85rem; color: var(--muted); white-space: nowrap; }
+    .nome-bar input {
+      flex: 1;
+      background: transparent;
+      border: none;
+      color: var(--text);
+      font-size: 0.9rem;
+      outline: none;
+    }
+    .nome-bar input::placeholder { color: var(--disabled); }
+
+    /* ── Step Cards ── */
+    .step {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 1.5rem;
+      margin-bottom: 1.25rem;
+      transition: border-color 0.2s;
+    }
+    .step.active { border-color: var(--accent); }
+
+    .step__header {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      margin-bottom: 1.25rem;
+    }
+    .step__num {
+      width: 28px; height: 28px;
+      border-radius: 50%;
+      background: var(--accent);
+      color: #0a0a0b;
+      font-size: 0.8rem;
+      font-weight: 700;
+      display: flex; align-items: center; justify-content: center;
+      flex-shrink: 0;
+    }
+    .step__title {
+      font-size: 1rem;
+      font-weight: 600;
+    }
+    .step__subtitle {
+      font-size: 0.8rem;
+      color: var(--muted);
+      margin-top: 0.1rem;
+    }
+
+    /* ── Form elements ── */
+    .field { margin-bottom: 1rem; }
+    .field:last-child { margin-bottom: 0; }
+    .field label {
+      display: block;
+      font-size: 0.8rem;
+      font-weight: 500;
+      color: var(--muted);
+      margin-bottom: 0.35rem;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+
+    input[type="text"],
+    select {
+      width: 100%;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: var(--text);
+      font-size: 0.9rem;
+      padding: 0.6rem 0.85rem;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+    input[type="text"]:focus,
+    select:focus { border-color: var(--accent); }
+    input[type="text"]::placeholder { color: var(--disabled); }
+    select option { background: var(--card); }
+
+    input[type="text"]:disabled,
+    select:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
+
+    /* ── Canal buttons ── */
+    .canal-grid {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+    }
+    .canal-btn {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: var(--text);
+      font-size: 0.8rem;
+      font-weight: 500;
+      padding: 0.45rem 0.9rem;
+      cursor: pointer;
+      transition: border-color 0.15s, background 0.15s, color 0.15s;
+      letter-spacing: 0.03em;
+    }
+    .canal-btn:hover { border-color: var(--accent); }
+    .canal-btn.selected {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #0a0a0b;
+      font-weight: 700;
+    }
+
+    /* ── Dropdowns row ── */
+    .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; }
+    @media (max-width: 540px) { .grid-2 { grid-template-columns: 1fr; } }
+
+    /* ── Campaign preview ── */
+    .campaign-preview {
+      margin-top: 1rem;
+      padding: 0.6rem 0.85rem;
+      background: var(--bg);
+      border: 1px dashed var(--border);
+      border-radius: 8px;
+      font-family: 'JetBrains Mono', 'Fira Mono', 'Consolas', monospace;
+      font-size: 0.78rem;
+      color: var(--accent);
+      word-break: break-all;
+      min-height: 2.2rem;
+    }
+    .campaign-preview .preview-label {
+      font-family: inherit;
+      font-size: 0.7rem;
+      color: var(--muted);
+      display: block;
+      margin-bottom: 0.2rem;
+      font-family: system-ui;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+
+    /* ── Hint ── */
+    .hint {
+      font-size: 0.75rem;
+      color: var(--muted);
+      margin-top: 0.35rem;
+    }
+    .hint.warn { color: var(--accent-dim); }
+
+    /* ── Generate button ── */
+    .btn-generate {
+      width: 100%;
+      background: var(--accent);
+      color: #0a0a0b;
+      border: none;
+      border-radius: 10px;
+      font-size: 1rem;
+      font-weight: 700;
+      padding: 0.85rem 1.5rem;
+      cursor: pointer;
+      margin-top: 0.5rem;
+      transition: opacity 0.2s;
+    }
+    .btn-generate:hover { opacity: 0.9; }
+    .btn-generate:disabled { opacity: 0.35; cursor: not-allowed; }
+
+    /* ── Result box ── */
+    #result-section {
+      display: none;
+      margin-top: 1.25rem;
+    }
+    .result-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 1.5rem;
+    }
+    .result-card h3 {
+      font-size: 0.85rem;
+      font-weight: 600;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.07em;
+      margin-bottom: 0.75rem;
+    }
+
+    .url-box {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 0.75rem 1rem;
+      font-family: 'JetBrains Mono', 'Fira Mono', 'Consolas', monospace;
+      font-size: 0.78rem;
+      color: var(--accent);
+      word-break: break-all;
+      margin-bottom: 0.5rem;
+    }
+    .url-label {
+      font-size: 0.72rem;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      margin-bottom: 0.25rem;
+    }
+
+    .result-note {
+      font-size: 0.78rem;
+      color: var(--muted);
+      margin-bottom: 1rem;
+      padding: 0.5rem 0.75rem;
+      background: rgba(245,158,11,0.07);
+      border-left: 3px solid var(--accent-dim);
+      border-radius: 4px;
+    }
+
+    .save-status {
+      font-size: 0.8rem;
+      margin-bottom: 1rem;
+      min-height: 1.2rem;
+    }
+    .save-status.ok { color: var(--success); }
+    .save-status.err { color: var(--muted); }
+
+    .result-actions { display: flex; gap: 0.75rem; }
+    .btn-copy, .btn-reset {
+      flex: 1;
+      border-radius: 8px;
+      font-size: 0.9rem;
+      font-weight: 600;
+      padding: 0.65rem 1rem;
+      cursor: pointer;
+      border: none;
+      transition: opacity 0.2s;
+    }
+    .btn-copy {
+      background: var(--accent);
+      color: #0a0a0b;
+    }
+    .btn-copy:hover { opacity: 0.85; }
+    .btn-reset {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      color: var(--text);
+    }
+    .btn-reset:hover { border-color: var(--accent); }
+
+    /* ── Error banner ── */
+    #error-banner {
+      display: none;
+      background: rgba(239,68,68,0.1);
+      border: 1px solid var(--error);
+      border-radius: 8px;
+      padding: 0.75rem 1rem;
+      font-size: 0.85rem;
+      color: var(--error);
+      margin-bottom: 1.25rem;
+    }
+
+    /* ── Loading state ── */
+    .loading-overlay {
+      display: none;
+      font-size: 0.85rem;
+      color: var(--muted);
+      padding: 0.5rem 0;
+    }
+    .loading-overlay.visible { display: block; }
+  </style>
+</head>
+<body>
+  <div class="container">
+
+    <!-- Header -->
+    <header class="header">
+      <p class="header__kicker">● FOTUS SOLAR · UTM BUILDER</p>
+      <h1 class="header__title">Gerador de Links Rastreados</h1>
+      <p class="header__subtitle">Crie URLs com parâmetros UTM padronizados sem precisar saber o que é UTM.</p>
+    </header>
+
+    <!-- Error banner (non-blocking) -->
+    <div id="error-banner" role="alert"></div>
+
+    <!-- Seu nome (persisted) -->
+    <div class="nome-bar">
+      <label for="input-nome">Seu nome:</label>
+      <input type="text" id="input-nome" placeholder="Ex.: Ana Lima" autocomplete="name" />
+    </div>
+
+    <!-- STEP 1: URL destino -->
+    <section class="step" id="step-1">
+      <div class="step__header">
+        <div class="step__num">1</div>
+        <div>
+          <div class="step__title">URL do destino</div>
+          <div class="step__subtitle">Para qual página o link vai levar?</div>
+        </div>
+      </div>
+      <div class="field">
+        <label for="input-url">URL de destino</label>
+        <input type="text" id="input-url" placeholder="https://fotus.com.br/integrador" />
+      </div>
+    </section>
+
+    <!-- STEP 2: Canal -->
+    <section class="step" id="step-2">
+      <div class="step__header">
+        <div class="step__num">2</div>
+        <div>
+          <div class="step__title">De onde vem o link?</div>
+          <div class="step__subtitle">Selecione o canal / plataforma de veiculação.</div>
+        </div>
+      </div>
+      <div class="loading-overlay" id="canal-loading">Carregando canais...</div>
+      <div class="canal-grid" id="canal-grid" role="group" aria-label="Canal"></div>
+    </section>
+
+    <!-- STEP 3: Sobre a campanha -->
+    <section class="step" id="step-3">
+      <div class="step__header">
+        <div class="step__num">3</div>
+        <div>
+          <div class="step__title">Sobre a campanha</div>
+          <div class="step__subtitle">Defina objetivo, produto, público, geo e período.</div>
+        </div>
+      </div>
+      <div class="grid-2">
+        <div class="field">
+          <label for="sel-objetivo">Objetivo</label>
+          <select id="sel-objetivo">
+            <option value="">— selecione —</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="sel-produto">Produto</label>
+          <select id="sel-produto">
+            <option value="">— selecione —</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="sel-publico">Público</label>
+          <select id="sel-publico">
+            <option value="">— selecione —</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="sel-geo">Geo</label>
+          <select id="sel-geo">
+            <option value="">— selecione —</option>
+          </select>
+        </div>
+      </div>
+      <div class="field" style="margin-top:0.75rem;">
+        <label for="input-periodo">Período <span style="font-weight:400;text-transform:none;">(opcional)</span></label>
+        <input type="text" id="input-periodo" placeholder="ABR26" maxlength="10" />
+      </div>
+
+      <!-- Campaign name live preview -->
+      <div class="campaign-preview" id="campaign-preview" aria-live="polite">
+        <span class="preview-label">Prévia do utm_campaign</span>
+        <span id="preview-value" style="display:block;">—</span>
+      </div>
+    </section>
+
+    <!-- STEP 4: Detalhes (opcional) -->
+    <section class="step" id="step-4">
+      <div class="step__header">
+        <div class="step__num">4</div>
+        <div>
+          <div class="step__title">Detalhes <span style="font-weight:400;font-size:0.85rem;">(opcional)</span></div>
+          <div class="step__subtitle">Criativo e palavra-chave para granularidade extra.</div>
+        </div>
+      </div>
+      <div class="grid-2">
+        <div class="field">
+          <label for="input-content">Identificador do criativo (utm_content)</label>
+          <input type="text" id="input-content" placeholder="vid|beneficio|v1" />
+        </div>
+        <div class="field">
+          <label for="input-term">Palavra-chave (utm_term)</label>
+          <input type="text" id="input-term" placeholder="energia solar curitiba" disabled />
+          <p class="hint" id="term-hint">Disponível apenas para Google Search.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- Generate button -->
+    <button class="btn-generate" id="btn-generate" disabled>Gerar e salvar link</button>
+
+    <!-- Result section -->
+    <div id="result-section" aria-live="polite">
+      <div class="result-card">
+        <div id="save-status" class="save-status"></div>
+
+        <!-- URL destino limpa (Google) -->
+        <div id="clean-url-block" style="display:none; margin-bottom:1rem;">
+          <div class="url-label">URL de destino (sem parâmetros)</div>
+          <div class="url-box" id="clean-url-value"></div>
+        </div>
+
+        <!-- Sufixo Google Ads -->
+        <div id="suffix-block" style="display:none; margin-bottom:1rem;">
+          <div class="url-label">Sufixo de URL final (Google Ads)</div>
+          <div class="url-box" id="suffix-value"></div>
+          <p class="result-note" id="suffix-note">
+            Cole no campo "Sufixo de URL final" do Google Ads. Não cole na URL — o gclid (auto-tagging) é o que conta.
+          </p>
+        </div>
+
+        <!-- Full URL (Meta / LinkedIn / outros) -->
+        <div id="full-url-block" style="display:none; margin-bottom:1rem;">
+          <div class="url-label">Link gerado</div>
+          <div class="url-box" id="full-url-value"></div>
+          <p class="result-note" id="full-url-note"></p>
+        </div>
+
+        <!-- Campaign info -->
+        <div style="margin-bottom:1rem;">
+          <div class="url-label">utm_campaign</div>
+          <div class="url-box" id="campaign-value" style="color:var(--text);font-size:0.75rem;"></div>
+        </div>
+
+        <div class="result-actions">
+          <button class="btn-copy" id="btn-copy">Copiar link</button>
+          <button class="btn-reset" id="btn-reset">Novo link</button>
+        </div>
+      </div>
+    </div>
+
+  </div><!-- /container -->
+
+  <script src="app.js"></script>
+</body>
+</html>
