@@ -56,7 +56,8 @@ export function buildResult(i: BuildInput): BuildResult {
   params.set("utm_campaign", utm_campaign);
   if (utm_content) params.set("utm_content", utm_content);
   if (utm_term) params.set("utm_term", utm_term);
-  const tracking_value = params.toString();
+  // URLSearchParams codifica espaço como '+'; força '%20' (inequívoco em UTM).
+  const tracking_value = params.toString().replaceAll("+", "%20");
 
   const url_final = i.canal.gera_via === "final_url_suffix"
     ? i.url_destino
