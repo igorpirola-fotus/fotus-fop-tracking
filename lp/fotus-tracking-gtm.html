@@ -1,0 +1,135 @@
+<!--
+  FOTUS FOP TRACKING — Tag para Google Tag Manager
+  =================================================
+  Como instalar:
+    1. GTM → Tags → Nova → Tipo "HTML personalizado".
+    2. Cole TODO este conteúdo (incluindo as tags <script>).
+    3. Acionador (trigger): "All Pages" (Todas as páginas) — page view.
+    4. Salvar e PUBLICAR o container.
+
+  O que faz:
+    - Cria/persiste session_id, captura UTM/gclid/fbp/fbc/GA4 (URL + localStorage).
+    - Dispara PageView no carregamento (cria a sessão com a UTM).
+    - Dispara Lead no evento `submit_success` do Elementor (lead realmente enviado),
+      lendo CNPJ/email/WhatsApp/nome/estado do formulário.
+    - Envia tudo pra Edge Function track-event do FOP (que grava sessions/events
+      e dispara Meta CAPI + GA4 server-side).
+  Segurança: a chave abaixo é a ANON (pública por design); o acesso real ao banco
+  é protegido por RLS. Nenhum segredo sensível aqui.
+-->
+<script>
+(function () {
+  'use strict';
+
+  var EDGE_URL = 'https://wttmlnhzvevtabjetsqz.supabase.co/functions/v1/track-event';
+  var ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Ind0dG1sbmh6dmV2dGFiamV0c3F6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzg1NjMzMDksImV4cCI6MjA5NDEzOTMwOX0.M2nO3V7IZR4GZ5O_X4LBySoHiqb6slj9eprOxsWJNbE';
+
+  function getCookie(n){ var m = document.cookie.match(new RegExp('(^| )' + n + '=([^;]+)')); return m ? decodeURIComponent(m[2]) : ''; }
+  function setCookie(n, v, d){ var e = new Date(Date.now() + d * 864e5).toUTCString(); document.cookie = n + '=' + encodeURIComponent(v) + ';expires=' + e + ';path=/;SameSite=Lax'; }
+  function uuid(){ try { return crypto.randomUUID(); } catch (e) { return 'fid-' + Date.now() + '-' + Math.random().toString(16).slice(2); } }
+
+  function sessionId(){
+    var k = 'fotus_sid';
+    var s = localStorage.getItem(k) || getCookie(k);
+    if (!s || s.length < 10){ s = uuid(); localStorage.setItem(k, s); setCookie(k, s, 365); }
+    return s;
+  }
+  var SESSION_ID = sessionId();
+
+  function getUTMs(){
+    var p = new URLSearchParams(location.search);
+    var keys = ['utm_source','utm_medium','utm_campaign','utm_content','utm_term'];
+    var o = {};
+    keys.forEach(function (k){
+      var v = p.get(k);
+      if (v){ o[k] = v; localStorage.setItem(k, v); setCookie(k, v, 30); }
+      else { var s = localStorage.getItem(k) || getCookie(k); if (s) o[k] = s; }
+    });
+    return o;
+  }
+  function getFB(){
+    var fbp = getCookie('_fbp');
+    var fbc = getCookie('_fbc');
+    var fbclid = new URLSearchParams(location.search).get('fbclid');
+    if (!fbc && fbclid){ fbc = 'fb.1.' + Date.now() + '.' + fbclid; setCookie('_fbc', fbc, 90); }
+    return { fbp: fbp, fbc: fbc };
+  }
+  function getGclid(){
+    var g = new URLSearchParams(location.search).get('gclid');
+    if (g){ localStorage.setItem('fotus_gclid', g); setCookie('fotus_gclid', g, 90); return g; }
+    return localStorage.getItem('fotus_gclid') || getCookie('fotus_gclid') || '';
+  }
+  function getGA4(){
+    var c = getCookie('_ga');
+    if (c){ var parts = c.split('.'); if (parts.length >= 4) return parts[2] + '.' + parts[3]; }
+    return SESSION_ID;
+  }
+  function device(){
+    var u = navigator.userAgent;
+    if (/tablet|ipad|playbook|silk/i.test(u)) return 'tablet';
+    if (/mobile|iphone|ipod|android|blackberry|mini|palm/i.test(u)) return 'mobile';
+    return 'desktop';
+  }
+
+  function track(eventName, data){
+    data = data || {};
+    var eventId = uuid();
+    var f = getFB();
+    // Pixel client-side em paralelo (deduplicação por eventID)
+    if (typeof window.fbq !== 'undefined'){
+      try { fbq('track', eventName, { content_category: data.content_category || 'aquisicao', value: data.value, currency: 'BRL' }, { eventID: eventId }); } catch (e) {}
+    }
+    var u = getUTMs();
+    var payload = {
+      event_id: eventId, event_name: eventName, session_id: SESSION_ID,
+      url: location.href, referrer: document.referrer, user_agent: navigator.userAgent,
+      device_type: device(), fbp: f.fbp, fbc: f.fbc,
+      gclid: getGclid(), ga4_client_id: getGA4(),
+      utms: u, event_data: data
+    };
+    // A track-event deployada lê UTMs e PII no NÍVEL RAIZ — enviar flat (e aninhado p/ compat).
+    ['utm_source','utm_medium','utm_campaign','utm_content','utm_term'].forEach(function (k){ payload[k] = u[k] || null; });
+    ['cnpj','email','phone','nome','estado','value'].forEach(function (k){ if (data[k] != null && data[k] !== '') payload[k] = data[k]; });
+    fetch(EDGE_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + ANON },
+      body: JSON.stringify(payload)
+    }).catch(function () {});
+  }
+
+  // ── 1. PageView (cria a sessão com a UTM) ─────────────────────────────────
+  track('PageView', { content_name: document.title || 'page', content_category: 'aquisicao' });
+
+  // ── 2. Lead — evento submit_success do Elementor (lead realmente enviado) ──
+  function fieldFrom(form, re){
+    var els = [].slice.call(form.querySelectorAll('input, select, textarea'));
+    var el = els.find(function (x){ return re.test((x.name || '') + ' ' + (x.placeholder || '') + ' ' + (x.type || '') + ' ' + (x.id || '')); });
+    return el ? ('' + el.value).trim() : '';
+  }
+  function fireLead(form){
+    if (!form) return;
+    var cnpj   = fieldFrom(form, /cnpj/i);
+    var email  = fieldFrom(form, /email|e-mail/i);
+    var phone  = fieldFrom(form, /whats|telefone|phone|\btel\b/i);
+    var nome   = fieldFrom(form, /nome|razao|empresa|company/i);
+    var estado = fieldFrom(form, /estado|\buf\b/i);
+    if (!cnpj && !email && !phone) return; // não parece form de lead
+    track('Lead', { cnpj: cnpj, email: email, phone: phone, nome: nome, estado: estado, content_category: 'aquisicao' });
+  }
+  // Elementor dispara submit_success (via jQuery) só quando o envio AJAX dá certo.
+  function bindElementor(){
+    if (!window.jQuery) return false;
+    window.jQuery(document).on('submit_success', function (event){
+      var form = (event && event.target && event.target.tagName === 'FORM')
+        ? event.target
+        : document.querySelector('.elementor-form');
+      fireLead(form);
+    });
+    return true;
+  }
+  if (!bindElementor()){
+    // jQuery ainda não carregou — tenta de novo ao carregar a página
+    window.addEventListener('load', bindElementor);
+  }
+})();
+</script>
