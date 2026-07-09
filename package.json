@@ -1,0 +1,5 @@
+{
+  "dependencies": {
+    "google-ads-api": "^23.0.0"
+  }
+}
