@@ -108,13 +108,14 @@ serve(async (req) => {
     }
     const scoreNovo = calcularScoreInicial(scoreDados as Record<string, unknown>)
 
-    // Buscar score atual para calcular delta
+    // Buscar email e score atual para calcular delta
     const { data: intAtual } = await supabase
       .from('integradores')
-      .select('lead_score')
+      .select('email, lead_score')
       .eq('id', integrador_id)
       .maybeSingle()
 
+    const emailIntegrador = intAtual?.email
     const scoreAnterior = intAtual?.lead_score ?? 0
 
     if (scoreNovo > scoreAnterior) {
@@ -138,6 +139,45 @@ serve(async (req) => {
         delta:          scoreNovo - scoreAnterior,
         motivo:         'enriquecimento_cnpj'
       }).catch(() => {})
+    }
+
+    // ── Sincronização Reversa (Push Back) para o RD Marketing ──────────────────
+    const rdApiKey = Deno.env.get('RD_API_TOKEN')
+    if (rdApiKey && emailIntegrador) {
+      try {
+        const rdPayload = {
+          event_type: 'CONVERSION',
+          event_family: 'CDP',
+          payload: {
+            conversion_identifier: 'enriquecimento_cnpj_ultron',
+            email: emailIntegrador,
+            cf_cnpj: cnpjClean,
+            cf_cnpj_porte: enrichPayload.porte,
+            cf_cnae_descricao: enrichPayload.cnae_descricao,
+            cf_anos_mercado: enrichPayload.anos_mercado,
+            cf_lead_score: enrichPayload.lead_score ?? scoreNovo
+          }
+        }
+        const rdRes = await fetch(
+          `https://api.rd.services/platform/conversions?api_key=${rdApiKey}`,
+          {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Accept': 'application/json'
+            },
+            body: JSON.stringify(rdPayload)
+          }
+        )
+        if (rdRes.ok) {
+          console.log(`✅ Push back de enriquecimento enviado para o RD Marketing para ${emailIntegrador}.`)
+        } else {
+          const errText = await rdRes.text()
+          console.warn(`[AVISO] Falha no push back para o RD Marketing (${rdRes.status}): ${errText}`)
+        }
+      } catch (rdErr) {
+        console.error('Erro ao realizar push back para o RD Marketing:', rdErr.message)
+      }
     }
 
     return new Response(

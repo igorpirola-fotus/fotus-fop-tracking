@@ -25,3 +25,6 @@ backup_data_*.sql
 
 # Claude Code — configurações locais (permissões, paths de máquina)
 .claude/settings.local.json
+
+# MCP local — contém tokens de acesso
+.mcp.json

@@ -1,9 +1,9 @@
 // supabase/functions/_shared/capi-sender.ts
 // Helper compartilhado: hash SHA-256, normalização de telefone, envio CAPI Meta
 
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import { createClient } from 'npm:@supabase/supabase-js@2'
 
-const META_API_VERSION = 'v18.0'
+const META_API_VERSION = 'v25.0'
 const MAX_RETRIES = 3
 
 // ─── Hash SHA-256 ────────────────────────────────────────────────────────────

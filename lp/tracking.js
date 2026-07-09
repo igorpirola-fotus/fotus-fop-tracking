@@ -15,7 +15,7 @@
   'use strict'
 
   // ── Configuração ────────────────────────────────────────────────────────────
-  const EDGE_URL = 'https://SEU-PROJECT-ID.supabase.co/functions/v1/track-event'
+  const EDGE_URL = 'https://wttmlnhzvevtabjetsqz.supabase.co/functions/v1/track-event'
 
   // ── Helpers de cookie ───────────────────────────────────────────────────────
   function getCookie(name) {
@@ -225,42 +225,8 @@
     })
   }
 
-  // ── 5. Scroll depth tracking (atualiza session) ─────────────────────────────
-  let maxScroll = 0
-  let scrollTimer = null
+  // ── 5. Anti-fraude e Device Type ──────────────────────────────────────────
+  // (Lógica já coberta em getDeviceType e isSuspicious)
 
-  window.addEventListener('scroll', function() {
-    const scrollPct = Math.round(
-      (window.scrollY / Math.max(1, document.body.scrollHeight - window.innerHeight)) * 100
-    )
-    if (scrollPct > maxScroll) {
-      maxScroll = scrollPct
-      clearTimeout(scrollTimer)
-      scrollTimer = setTimeout(() => {
-        fetch(EDGE_URL + '/../session-update', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ session_id: SESSION_ID, scroll_depth_pct: maxScroll })
-        }).catch(() => {})
-      }, 500)
-    }
-  })
-
-  // ── 6. Tempo na página (beacon no unload) ───────────────────────────────────
-  const startTime = Date.now()
-  window.addEventListener('visibilitychange', function() {
-    if (document.visibilityState === 'hidden') {
-      const seconds = Math.round((Date.now() - startTime) / 1000)
-      navigator.sendBeacon(
-        EDGE_URL,
-        JSON.stringify({
-          event_id: crypto.randomUUID(),
-          event_name: 'SessionEnd',
-          session_id: SESSION_ID,
-          event_data: { time_on_page_seconds: seconds }
-        })
-      )
-    }
-  })
 
 })()

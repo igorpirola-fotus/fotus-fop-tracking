@@ -387,6 +387,37 @@ ERP_WEBHOOK_SECRET         Secret para validar webhooks do ERP
 
 ---
 
+## Scheduled Pauses — pausa/retomada automática de campanhas Meta
+
+Sistema que aplica regras de pausa/retomada em campanhas e ad sets Meta Ads conforme cron (recurring) ou timestamp único (one_shot). Implementado em jun/2026 para suportar dayparting de fim de semana e pausas sazonais (São João, feriados).
+
+**Componentes:**
+- Tabela `ad_schedule_rules` — regras ativas (uma linha por target × ação)
+- Tabela `ad_schedule_log` — histórico imutável de execuções
+- View `vw_schedule_health` — regras que falharam nas últimas 24h
+- Edge Function `meta-ads-scheduler` — disparada a cada minuto via `pg_cron`, chama a API Meta com `status=PAUSED|ACTIVE`
+- Migration: `supabase/migrations/008_ad_schedule_rules.sql`
+- Seed das regras vigentes: `supabase/seed/ad_schedule_rules.sql`
+
+**Regras ativas (estado inicial):**
+- **Dayparting FDS** — pausa sex 17h, retoma seg 7h, em 3 campanhas (ACQ GERAL BR, RET BASE BR, ACQ MICRO SP). Cron BR (`America/Sao_Paulo`).
+- **São João 2026** — pausa 6 ad sets (NE + CD-BA + CD-PE em ACQ e RET) de 20/jun 00:00 até 01/jul 07:00 (-03).
+
+**Prioridade:** `one_shot pause > recurring resume`. Se um target tem one_shot pause ativo (run_at já passou e o resume correspondente ainda não chegou), o scheduler ignora resumes recorrentes nele — garante que São João não seja despausado pelo dayparting de segunda.
+
+**Token Meta:** usa `META_ACCESS_TOKEN` (system user, 60d). Alertar 7d antes de expirar.
+
+**Para adicionar uma nova regra:**
+1. Inserir linha em `ad_schedule_rules` com `active=true`. Não precisa redeploy.
+2. Para regras recorrentes, usar cron padrão 5-field: `min hour dom mon dow`.
+3. Para regra única, popular `run_at` (timestamptz, com timezone explícito).
+
+**Rollback de emergência:**
+- `UPDATE ad_schedule_rules SET active = false;` (mata todas as regras)
+- `SELECT cron.unschedule('meta-ads-scheduler-tick');` (mata o cron tick)
+
+---
+
 ## O que este projeto NÃO faz (para não inventar)
 
 - Não tem autenticação de usuário final (não é SaaS)

@@ -1,5 +1,4 @@
-import { serve } from 'https://deno.land/std@0.177.0/http/server.ts'
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import { createClient } from 'npm:@supabase/supabase-js@2'
 import { sendToCAPI, buildUserData, normalizePhone } from '../_shared/capi-sender.ts'
 import { sendToGA4 } from '../_shared/ga4-sender.ts'
 
@@ -13,7 +12,7 @@ const CORS_HEADERS = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
 
-serve(async (req) => {
+Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: CORS_HEADERS })
   }
@@ -23,15 +22,18 @@ serve(async (req) => {
     const {
       event_id, event_name, session_id,
       fbp, fbc,
-      utm_source, utm_medium, utm_campaign, utm_content, utm_term,
       gclid, ga4_client_id, ga4_session_id,
-      referrer, page_url, device_type,
-      scroll_depth_pct, time_on_page_seconds,
-      // Lead-only
-      email, phone, nome, cnpj, estado,
+      referrer, url, device_type,
+      utms = {},
+      event_data = {},
       // Teste CAPI
       test_event_code
     } = body
+
+    // Extrair dados aninhados do contrato com tracking.js
+    const page_url = url || body.page_url
+    const { utm_source, utm_medium, utm_campaign, utm_content, utm_term } = utms
+    const { email, phone, nome, cnpj, estado, scroll_depth_pct, time_on_page_seconds } = event_data
 
     if (!event_id || !event_name || !session_id) {
       return new Response(
