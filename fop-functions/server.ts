@@ -12,6 +12,11 @@ const CORS = {
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { ...CORS, "Content-Type": "application/json" } });
 
+// O GTM já envia Meta Pixel/CAPI + GA4 com deduplicação por event_id.
+// Por padrão, este servidor só GRAVA NO BANCO (evita double-count no Meta/GA4).
+// Para reativar o envio server-side, setar env CAPI_ENABLED=true.
+const CAPI_ENABLED = Deno.env.get("CAPI_ENABLED") === "true";
+
 // ─────────────────────────── track-event ────────────────────────────────────
 async function trackEvent(req: Request): Promise<Response> {
   try {
@@ -133,38 +138,44 @@ async function trackEvent(req: Request): Promise<Response> {
       utm_content: utm_content || null,
     }, { onConflict: "event_id", conflictDoNothing: true });
 
-    // 6. Meta CAPI
-    const capiResult = await sendToCAPI({
-      event_name, event_id,
-      event_source_url: page_url || undefined,
-      action_source: "website",
-      user_data: userData,
-      custom_data: cnpj ? { cnpj: cnpj.replace(/\D/g, "") } : undefined,
-      test_event_code: test_event_code || undefined,
-    });
+    // 6. Meta CAPI + 7. GA4 — só quando CAPI_ENABLED (padrão OFF: o GTM já envia com dedup).
+    let capiOk = false;
+    if (CAPI_ENABLED) {
+      const capiResult = await sendToCAPI({
+        event_name, event_id,
+        event_source_url: page_url || undefined,
+        action_source: "website",
+        user_data: userData,
+        custom_data: cnpj ? { cnpj: cnpj.replace(/\D/g, "") } : undefined,
+        test_event_code: test_event_code || undefined,
+      });
+      capiOk = capiResult.success;
 
-    await update("public.events", {
-      meta_capi_status: capiResult.success ? "sent" : "failed",
-      meta_event_id: capiResult.eventId || null,
-      meta_fbtrace_id: capiResult.fbtrace_id || null,
-      meta_error: capiResult.error || null,
-      meta_retry_count: capiResult.success ? 0 : 1,
-    }, "event_id", event_id);
+      await update("public.events", {
+        meta_capi_status: capiResult.success ? "sent" : "failed",
+        meta_event_id: capiResult.eventId || null,
+        meta_fbtrace_id: capiResult.fbtrace_id || null,
+        meta_error: capiResult.error || null,
+        meta_retry_count: capiResult.success ? 0 : 1,
+      }, "event_id", event_id);
 
-    // 7. GA4 fire-and-forget
-    sendToGA4({
-      event_name,
-      client_id: ga4_client_id || session_id,
-      session_id,
-      user_id: integradorId || undefined,
-      event_params: {
-        page_location: page_url || undefined,
-        utm_source, utm_campaign, utm_content,
-        gclid: gclid || undefined,
-      },
-    });
+      sendToGA4({
+        event_name,
+        client_id: ga4_client_id || session_id,
+        session_id,
+        user_id: integradorId || undefined,
+        event_params: {
+          page_location: page_url || undefined,
+          utm_source, utm_campaign, utm_content,
+          gclid: gclid || undefined,
+        },
+      });
+    } else {
+      // Modo só-banco: marca que o Meta/GA4 é responsabilidade do GTM.
+      await update("public.events", { meta_capi_status: "gtm" }, "event_id", event_id);
+    }
 
-    return json({ success: true, capi: capiResult.success, integrador_id: integradorId });
+    return json({ success: true, capi: capiOk, integrador_id: integradorId });
   } catch (error) {
     await logError("track-event", (error as Error).message);
     return json({ error: (error as Error).message }, 500);
