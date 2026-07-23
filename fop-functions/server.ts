@@ -1,5 +1,5 @@
 // server.ts — FOP tracking server-side (Deno standalone, self-hosted no EasyPanel).
-// Porta as Edge Functions track-event e enrich-cnpj do Supabase para Postgres direto (fop-db).
+// Porta as Edge Functions track-event, enrich-cnpj e rd-sync do Supabase para Postgres direto (fop-db).
 // Regras preservadas do CLAUDE.md: SHA-256 PII, dedup por event_id, retry CAPI, GA4 fire-and-forget, geo Cloudflare.
 import { insert, logError, one, q, update } from "./db.ts";
 import { buildUserData, normalizePhone, sendToCAPI } from "./capi-sender.ts";
@@ -15,6 +15,8 @@ const json = (body: unknown, status = 200) =>
 // O GTM já envia Meta Pixel/CAPI + GA4 com deduplicação por event_id.
 // Por padrão, este servidor só GRAVA NO BANCO (evita double-count no Meta/GA4).
 // Para reativar o envio server-side, setar env CAPI_ENABLED=true.
+// ATENÇÃO: esta flag vale só para /track-event (eventos de site que o GTM duplica).
+// O /rd-sync NÃO usa esta flag — ver comentário na seção rd-sync.
 const CAPI_ENABLED = Deno.env.get("CAPI_ENABLED") === "true";
 
 // ─────────────────────────── rd-sync: mapas ─────────────────────────────────
@@ -310,6 +312,14 @@ async function enrichCnpjHandler(req: Request): Promise<Response> {
 }
 
 // ─────────────────────────── rd-sync ─────────────────────────────────────────
+// Recebe os webhooks do RD Station CRM e gera os eventos de FUNDO DE FUNIL
+// (Contact/Schedule/AddToCart/Purchase/OportunidadePerdida).
+//
+// IMPORTANTE — por que aqui o CAPI/GA4 ficam SEMPRE LIGADOS (≠ /track-event):
+// estes eventos nascem no CRM (webhook), não no navegador. O GTM só dispara
+// client-side na LP, então NÃO tem como enviá-los. Este servidor é o ÚNICO
+// emissor — inclusive do `Schedule` ("Lead Qualificado Fotus"), objetivo de
+// otimização das campanhas. Não há double-count com o GTM. Não gatear por CAPI_ENABLED.
 async function rdSync(req: Request): Promise<Response> {
   let rawBody: unknown = null;
   try {
