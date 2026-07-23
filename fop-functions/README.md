@@ -6,6 +6,7 @@ Parte da migração Supabase → EasyPanel (ver `docs/superpowers/plans/DISCOVER
 
 ## Endpoints
 - `POST /track-event` — mesmo contrato da Edge Function antiga (event_id, event_name, session_id, ...).
+- `POST /rd-sync` — recebe os webhooks do RD Station CRM (payload nativo `event_name` + `document`), autenticado via header `Authorization: Bearer <RD_WEBHOOK_RECEIVER_TOKEN>`; mapeia etapa do deal → evento Meta/GA4 (Contact/Schedule/AddToCart/Purchase/OportunidadePerdida) e dispara CAPI/GA4 (sempre, independente de `CAPI_ENABLED` — não há caminho client-side/GTM para eventos de CRM).
 - `POST /enrich-cnpj` — `{ cnpj, integrador_id }` (BrasilAPI + lead score).
 - `GET /health` — checa conexão com o banco (`{ ok: true }`).
 
@@ -24,6 +25,8 @@ Parte da migração Supabase → EasyPanel (ver `docs/superpowers/plans/DISCOVER
 | `META_CAPI_TOKEN` | token da API de Conversões (sistema) |
 | `GA4_MEASUREMENT_ID` | `G-XXXXXXXXXX` (opcional — sem ele, GA4 é pulado) |
 | `GA4_API_SECRET` | secret do Measurement Protocol (opcional) |
+| `RD_WEBHOOK_RECEIVER_TOKEN` | Bearer exigido na entrada do webhook do RD CRM — obrigatório p/ o `rd-sync` |
+| `RD_CRM_TOKEN` | token da API RD CRM v2 (opcional — usado só no fallback #3 de extração de CNPJ via consulta da organização) |
 
 ## Deploy no EasyPanel (via API tRPC ou UI)
 1. Serviço **App** no projeto `fotus`, nome ex. `fop-functions`.

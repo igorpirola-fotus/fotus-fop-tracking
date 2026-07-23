@@ -441,7 +441,7 @@ async function rdSync(req: Request): Promise<Response> {
       return json({ success: true, ...result }, 200);
     }
   } catch (error) {
-    await logError("rd-sync", (error as Error).message, rawBody);
+    await logError("rd-sync", (error as Error).message);
     return json({ error: (error as Error).message }, 500);
   }
 }
