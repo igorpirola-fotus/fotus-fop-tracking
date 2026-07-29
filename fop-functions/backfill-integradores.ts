@@ -37,6 +37,8 @@ export async function backfillWon(opts: {
   pageSize?: number;
   dryRun?: boolean;
   throttleMs?: number;
+  desde?: string;
+  ate?: string;
 }): Promise<BackfillResult> {
   const pageSize = Math.min(Math.max(opts.pageSize ?? 100, 1), 200);
   const pagesPerRun = Math.min(Math.max(opts.pagesPerRun ?? 3, 1), 20);
@@ -63,7 +65,7 @@ export async function backfillWon(opts: {
   };
 
   for (let i = 0; i < pagesPerRun; i++) {
-    const deals = await listWonDeals(page, pageSize);
+    const deals = await listWonDeals(page, pageSize, opts.desde, opts.ate);
     r.paginas_lidas++;
     r.deals_lidos += deals.length;
 

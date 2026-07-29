@@ -649,7 +649,10 @@ async function backfillHandler(req: Request): Promise<Response> {
 
     // Dimensiona antes de varrer: 1 chamada devolve a paginação da listagem.
     if (body.count_only === true) {
-      return json({ success: true, meta: await wonDealsMeta() });
+      return json({
+        success: true,
+        meta: await wonDealsMeta(body.desde as string, body.ate as string),
+      });
     }
 
     const result = await backfillWon({
@@ -658,6 +661,8 @@ async function backfillHandler(req: Request): Promise<Response> {
       pageSize: Number(body.page_size) || 100,
       dryRun: body.dry_run === true,
       throttleMs: body.throttle_ms === undefined ? undefined : Number(body.throttle_ms),
+      desde: body.desde as string | undefined,
+      ate: body.ate as string | undefined,
     });
     return json({ success: true, ...result });
   } catch (error) {

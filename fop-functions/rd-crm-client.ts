@@ -182,9 +182,18 @@ async function rdGet(path: string, attempt = 0): Promise<Record<string, unknown>
 export async function listWonDeals(
   page: number,
   pageSize: number,
+  desde?: string,
+  ate?: string,
 ): Promise<Record<string, unknown>[]> {
   const qs = new URLSearchParams();
-  qs.set("filter", "status:won");
+  // Janela de datas é OBRIGATÓRIA para cobrir o histórico completo: medido em
+  // 29/jul/2026, a API devolve HTTP 400 no registro 10.001 e existem ≥10.000
+  // deals ganhos. Sem fatiar por período, tudo antes dos 10.000 mais antigos
+  // ficaria invisível — o backfill silenciosamente cobriria menos do que parece.
+  const partes = ["status:won"];
+  if (desde) partes.push(`closed_at:>=${desde}`);
+  if (ate) partes.push(`closed_at:<${ate}`);
+  qs.set("filter", partes.join(" and "));
   qs.set("sort[closed_at]", "asc");
   qs.set("page[number]", String(page));
   qs.set("page[size]", String(pageSize));
@@ -207,10 +216,16 @@ export async function listWonDeals(
  * Devolve o envelope cru (links/meta) porque o formato varia entre versões da
  * API — quem chama inspeciona o que veio.
  */
-export async function wonDealsMeta(): Promise<Record<string, unknown>> {
+export async function wonDealsMeta(
+  desde?: string,
+  ate?: string,
+): Promise<Record<string, unknown>> {
   const token = await getAccessToken();
+  const partes = ["status:won"];
+  if (desde) partes.push(`closed_at:>=${desde}`);
+  if (ate) partes.push(`closed_at:<${ate}`);
   const qs = new URLSearchParams({
-    "filter": "status:won",
+    "filter": partes.join(" and "),
     "page[number]": "1",
     "page[size]": "1",
   });
