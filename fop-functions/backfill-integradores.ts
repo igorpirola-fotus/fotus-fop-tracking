@@ -36,10 +36,16 @@ export async function backfillWon(opts: {
   pagesPerRun?: number;
   pageSize?: number;
   dryRun?: boolean;
+  throttleMs?: number;
 }): Promise<BackfillResult> {
   const pageSize = Math.min(Math.max(opts.pageSize ?? 100, 1), 200);
   const pagesPerRun = Math.min(Math.max(opts.pagesPerRun ?? 3, 1), 20);
   const dryRun = opts.dryRun === true;
+  // Freio: um deal NOVO custa até 2 chamadas na API (deal + organização) e o
+  // limite do CRM é 120 req/min. Medido em 29/jul sem freio: 20 deals em 10s
+  // = ~240 req/min, o dobro do teto. 500ms/deal mantém ~120 req/min no pior
+  // caso; deals em cache não gastam chamada e a pausa fica ociosa de propósito.
+  const throttleMs = Math.min(Math.max(opts.throttleMs ?? 500, 0), 5000);
   let page = Math.max(opts.page ?? 1, 1);
 
   const r: BackfillResult = {
@@ -76,6 +82,8 @@ export async function backfillWon(opts: {
           r.ja_contabilizados++;
           continue;
         }
+
+        if (throttleMs > 0) await new Promise((r) => setTimeout(r, throttleMs));
 
         const { cnpj } = await resolveDealCnpj(dealId, deal);
         if (!cnpj) {

@@ -22,6 +22,11 @@ const json = (body: unknown, status = 200) =>
 // O /rd-sync NÃO usa esta flag — ver comentário na seção rd-sync.
 const CAPI_ENABLED = Deno.env.get("CAPI_ENABLED") === "true";
 
+// Eventos de CRM só vão ao Meta/GA4 se o integrador tiver sessão rastreada
+// (sinal de mídia). Grava no banco sempre. Ver comentário no gate, em
+// processRdEvent. Default LIGADO — desligar só por decisão explícita.
+const REQUIRE_SESSION_FOR_CAPI = Deno.env.get("RD_SYNC_CAPI_REQUIRE_SESSION") !== "false";
+
 // ─────────────────────────── rd-sync: mapas ─────────────────────────────────
 // Etapa RD CRM → evento Meta/GA4 (chaves em lowercase; nomes reais das etapas — doc 11)
 const STAGE_TO_EVENT: Record<string, string> = {
@@ -574,6 +579,23 @@ async function processRdEvent(params: {
     utm_campaign: session?.utm_campaign || null,
   }, { onConflict: "event_id", conflictDoNothing: true });
 
+  // ── Gate de sinal de mídia ────────────────────────────────────────────────
+  // O fop-db é a fonte COMPLETA (grava sempre, acima). Mas o Meta/GA4 só devem
+  // receber eventos de CRM de quem tem sessão rastreada, isto é, sinal de que
+  // passou pelo funil de mídia.
+  // Por quê: medido em 29/jul/2026, o CRM fecha ~450 deals `won` por dia (pico
+  // de 1.468 em 28/jul) contra ~13 leads/dia vindos de mídia paga. Sem este
+  // gate, o backfill da base faria o Meta receber centenas de `Purchase`/dia de
+  // venda de carteira e prospecção interna — ROAS reportado irreal e otimização
+  // aprendendo com sinal que a mídia não produziu.
+  // Só desligue (RD_SYNC_CAPI_REQUIRE_SESSION=false) se a intenção for
+  // deliberadamente medir TODA a receita no Meta, mídia ou não.
+  const temSinalDeMidia = !!session;
+  if (!temSinalDeMidia && REQUIRE_SESSION_FOR_CAPI) {
+    await update("public.events", { meta_capi_status: "sem_sinal_midia" }, "event_id", eventId);
+    return { event: finalEventName, capi: false };
+  }
+
   const capiResult = await sendToCAPI({
     event_name: finalEventName,
     event_id: eventId,
@@ -629,6 +651,7 @@ async function backfillHandler(req: Request): Promise<Response> {
       pagesPerRun: Number(body.pages_per_run) || 3,
       pageSize: Number(body.page_size) || 100,
       dryRun: body.dry_run === true,
+      throttleMs: body.throttle_ms === undefined ? undefined : Number(body.throttle_ms),
     });
     return json({ success: true, ...result });
   } catch (error) {

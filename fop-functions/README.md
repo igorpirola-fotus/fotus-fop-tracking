@@ -64,6 +64,34 @@ locais que ainda usem `RD_CRM_REFRESH_TOKEN` do `.env` vão falhar com `invalid_
 **Rate limit:** 120 req/min no CRM contra picos de 10k webhooks/hora → o cache é o que
 segura; o `429` respeita o header `Retry-After`.
 
+### Gate de sinal de mídia (`RD_SYNC_CAPI_REQUIRE_SESSION`, default ligado)
+Eventos de CRM são **sempre gravados** no fop-db, mas só vão ao Meta/GA4 se o
+integrador tiver **sessão rastreada**. Medido em 29/jul/2026: o CRM fecha ~450
+deals `won` por dia (pico de 1.468 em 28/jul) contra ~13 leads/dia de mídia paga.
+Sem o gate, o Meta receberia centenas de `Purchase`/dia de venda de carteira e
+prospecção interna — ROAS reportado irreal e otimização aprendendo com sinal que
+a mídia não gerou. Evento barrado fica com `meta_capi_status = 'sem_sinal_midia'`
+(fica no banco, contável, e pode ser reenviado depois se a política mudar).
+Setar `RD_SYNC_CAPI_REQUIRE_SESSION=false` só se a intenção for deliberadamente
+medir toda a receita no Meta, mídia ou não.
+
+### Backfill de integradores (`POST /backfill-integradores`)
+Percorre os deals **ganhos** do CRM (`filter=status:won`, `sort[closed_at]=asc`)
+e reconstrói `numero_pedidos` / `ltv_total` / `ticket_medio` / datas de compra.
+Necessário porque `integradores` só tinha quem passou pela LP (~1.970 contra
+~12.000 deals distintos por semana) — e sem histórico o rd-sync mandaria
+`Purchase` (primeira compra) no lugar de `PurchaseRecorrente`.
+
+```jsonc
+{ "page": 1, "pages_per_run": 3, "page_size": 100,
+  "dry_run": true,        // conta sem gravar — sempre comece assim
+  "throttle_ms": 500 }    // freio: 2 chamadas por deal novo contra 120 req/min
+```
+Responde `has_more` / `next_page` para o loop. Idempotente via
+`public.rd_won_backfill` (a acumulação é soma: sem esse controle, rodar duas
+vezes dobraria o LTV). Workflow: `[ULTRON] backfill-integradores (won) — MANUAL`.
+Medição do 1º dry run (20 deals): **17 com CNPJ resolvido, 3 sem, 0 erros**.
+
 ### Status da fila `rdstation_crm_webhook_events`
 | status | significado |
 |---|---|
