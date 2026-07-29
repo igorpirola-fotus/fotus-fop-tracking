@@ -4,7 +4,7 @@
 import { insert, logError, one, q, update } from "./db.ts";
 import { buildUserData, normalizePhone, sendToCAPI } from "./capi-sender.ts";
 import { sendToGA4 } from "./ga4-sender.ts";
-import { resolveDealCnpj, wonDealsMeta } from "./rd-crm-client.ts";
+import { listWonDeals, resolveDealCnpj, wonDealsMeta } from "./rd-crm-client.ts";
 import { cleanCnpj, findCnpjDeep } from "./cnpj.ts";
 import { backfillWon } from "./backfill-integradores.ts";
 
@@ -646,6 +646,26 @@ async function backfillHandler(req: Request): Promise<Response> {
     }
 
     const body = await req.json().catch(() => ({})) as Record<string, unknown>;
+
+    // Diagnóstico: quais campos a LISTAGEM de deals traz. Se ela já vier com o
+    // vínculo da organização, o backfill economiza 1 chamada por deal (o
+    // GET /deals/{id}) — a diferença entre ~7h e ~30min para 51.661 deals.
+    // Devolve só nomes de campos e flags, nunca o conteúdo (evita PII no log).
+    if (body.sample_keys === true) {
+      const [deal] = await listWonDeals(1, 1, body.desde as string, body.ate as string);
+      if (!deal) return json({ success: true, vazio: true });
+      return json({
+        success: true,
+        campos: Object.keys(deal).sort(),
+        tem_organization: deal.organization !== undefined && deal.organization !== null,
+        tem_organization_id: deal.organization_id !== undefined && deal.organization_id !== null,
+        campos_organization: deal.organization && typeof deal.organization === "object"
+          ? Object.keys(deal.organization as Record<string, unknown>).sort()
+          : null,
+        tem_contacts: Array.isArray(deal.contacts) && (deal.contacts as unknown[]).length > 0,
+        tem_deal_custom_fields: Array.isArray(deal.deal_custom_fields),
+      });
+    }
 
     // Dimensiona antes de varrer: 1 chamada devolve a paginação da listagem.
     if (body.count_only === true) {
