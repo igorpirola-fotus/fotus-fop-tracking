@@ -85,9 +85,19 @@ export async function backfillWon(opts: {
           continue;
         }
 
-        if (throttleMs > 0) await new Promise((r) => setTimeout(r, throttleMs));
+        const { cnpj, orgName, fonte } = await resolveDealCnpj(dealId, deal);
 
-        const { cnpj, orgName } = await resolveDealCnpj(dealId, deal);
+        // Freio APENAS quando houve chamada de API. Deal cuja organização já
+        // está em cache não consome cota, então pausar ali seria desperdício
+        // puro: medido em 29/jul, 100 deals resolveram 100% em 12,7s, e a
+        // maioria das organizações repete entre deals (vários pedidos por
+        // integrador). Sem esta distinção, o backfill de 2026 levaria ~5h em vez
+        // de ~30min — ou estouraria os 120 req/min se eu baixasse o throttle.
+        const gastouApi = !["cache", "cache_organizacao", "webhook_payload"].includes(fonte);
+        if (gastouApi && throttleMs > 0) {
+          await new Promise((r) => setTimeout(r, throttleMs));
+        }
+
         if (!cnpj) {
           r.sem_cnpj++;
           continue;
