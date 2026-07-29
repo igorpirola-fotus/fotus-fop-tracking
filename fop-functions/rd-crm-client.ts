@@ -173,6 +173,34 @@ async function rdGet(path: string, attempt = 0): Promise<Record<string, unknown>
   throw new Error(`RD CRM GET ${path} → ${res.status}`);
 }
 
+/**
+ * Lista deals GANHOS, mais antigos primeiro. Usado pelo backfill.
+ * Ordem `closed_at asc` importa: garante que `data_primeira_compra` seja
+ * realmente a primeira. NB: listagens do CRM devolvem no máximo os 10.000
+ * primeiros registros do filtro (limite da API, documentado).
+ */
+export async function listWonDeals(
+  page: number,
+  pageSize: number,
+): Promise<Record<string, unknown>[]> {
+  const qs = new URLSearchParams();
+  qs.set("filter", "status:won");
+  qs.set("sort[closed_at]", "asc");
+  qs.set("page[number]", String(page));
+  qs.set("page[size]", String(pageSize));
+
+  const body = await rdGet(`/crm/v2/deals?${qs.toString()}`);
+  if (!body) return [];
+  // A API embrulha em `data` (já desembrulhado por rdGet) e pode devolver o
+  // array direto ou dentro de outra chave de coleção.
+  if (Array.isArray(body)) return body as Record<string, unknown>[];
+  for (const k of ["deals", "items", "results"]) {
+    const v = (body as Record<string, unknown>)[k];
+    if (Array.isArray(v)) return v as Record<string, unknown>[];
+  }
+  return [];
+}
+
 interface ResolvedCnpj {
   cnpj: string;
   fonte: string;

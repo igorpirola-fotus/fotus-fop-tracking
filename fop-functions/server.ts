@@ -6,6 +6,7 @@ import { buildUserData, normalizePhone, sendToCAPI } from "./capi-sender.ts";
 import { sendToGA4 } from "./ga4-sender.ts";
 import { resolveDealCnpj } from "./rd-crm-client.ts";
 import { cleanCnpj, findCnpjDeep } from "./cnpj.ts";
+import { backfillWon } from "./backfill-integradores.ts";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -610,6 +611,32 @@ async function processRdEvent(params: {
   return { event: finalEventName, capi: capiResult.success };
 }
 
+// ─────────────────────── backfill-integradores ──────────────────────────────
+// Reconstrói numero_pedidos/ltv_total/datas a partir dos deals ganhos do CRM.
+// Chamado em loop pelo workflow n8n (processa N páginas por chamada).
+// Mesma autenticação do rd-sync: só quem tem o RD_WEBHOOK_RECEIVER_TOKEN.
+async function backfillHandler(req: Request): Promise<Response> {
+  try {
+    const authHeader = req.headers.get("authorization") || "";
+    const receiverToken = Deno.env.get("RD_WEBHOOK_RECEIVER_TOKEN");
+    if (!receiverToken || authHeader !== `Bearer ${receiverToken}`) {
+      return json({ error: "Unauthorized" }, 401);
+    }
+
+    const body = await req.json().catch(() => ({})) as Record<string, unknown>;
+    const result = await backfillWon({
+      page: Number(body.page) || 1,
+      pagesPerRun: Number(body.pages_per_run) || 3,
+      pageSize: Number(body.page_size) || 100,
+      dryRun: body.dry_run === true,
+    });
+    return json({ success: true, ...result });
+  } catch (error) {
+    await logError("backfill-integradores", (error as Error).message);
+    return json({ error: (error as Error).message }, 500);
+  }
+}
+
 // ─────────────────────────── router ─────────────────────────────────────────
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: CORS });
@@ -625,6 +652,7 @@ Deno.serve(async (req: Request) => {
   }
   if (path === "/track-event") return await trackEvent(req);
   if (path === "/rd-sync") return await rdSync(req);
+  if (path === "/backfill-integradores") return await backfillHandler(req);
   if (path === "/enrich-cnpj") return await enrichCnpjHandler(req);
   return json({ error: "not found" }, 404);
 });
