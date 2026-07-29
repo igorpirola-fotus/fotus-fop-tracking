@@ -222,12 +222,28 @@ export async function resolveDealCnpj(
     cnpj = findCnpjDeep(deal);
   }
 
-  // 4. Organização, quando o deal só devolveu o id.
+  // 4. Organização. Validado em 29/jul/2026 com deals reais: o deal NUNCA traz
+  //    `organization` inline, só `organization_id` — o CNPJ vive em
+  //    `organization.custom_fields["cnpj-41d5"]`. Ou seja, este passo é a regra,
+  //    não a exceção: são 2 chamadas por deal novo, contra 120 req/min.
+  //    Por isso, antes de gastar a 2ª chamada, olhamos se a MESMA organização já
+  //    foi resolvida por outro deal (vários deals por integrador é o normal aqui).
   if (!cnpj && orgId) {
-    const organization = await rdGet(`/crm/v2/organizations/${orgId}`);
-    if (organization) {
-      cnpj = findCnpjDeep(organization);
-      if (cnpj) fonte = "organization_api";
+    const irmao = await one<{ cnpj: string }>(
+      `SELECT cnpj FROM public.rd_deal_cnpj_cache
+        WHERE org_id = $1 AND cnpj IS NOT NULL
+        ORDER BY updated_at DESC LIMIT 1`,
+      [orgId],
+    );
+    if (irmao?.cnpj) {
+      cnpj = irmao.cnpj;
+      fonte = "cache_organizacao";
+    } else {
+      const organization = await rdGet(`/crm/v2/organizations/${orgId}`);
+      if (organization) {
+        cnpj = findCnpjDeep(organization);
+        if (cnpj) fonte = "organization_api";
+      }
     }
   }
 

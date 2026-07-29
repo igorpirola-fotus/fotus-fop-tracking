@@ -41,8 +41,15 @@ funil (`event_source = 'system_generated'`). Nenhum `Purchase` foi registrado.
 Ordem de resolução hoje (`rd-crm-client.ts` + `cnpj.ts`), do mais barato ao mais caro:
 1. varredura do payload do webhook (grátis);
 2. cache `public.rd_deal_cnpj_cache` — inclui *negative caching* (deal sem CNPJ não é reconsultado);
-3. `GET /crm/v2/deals/{id}` — o deal completo traz a organização;
-4. `GET /crm/v2/organizations/{org_id}` — quando o deal só devolve o id da empresa.
+3. `GET /crm/v2/deals/{id}` — devolve o vínculo com a empresa;
+4. reaproveitamento por organização (outro deal da mesma empresa já resolvido);
+5. `GET /crm/v2/organizations/{org_id}` — é aqui que o CNPJ está.
+
+**Formato real, validado em 29/jul/2026 contra 4 deals de produção:** o deal **nunca**
+traz `organization` inline — só `organization_id`. O CNPJ vive em
+`organization.custom_fields["cnpj-41d5"]` (chave com sufixo; em parte dos casos também
+aparece dentro de `organization.name`). Logo são **2 chamadas por deal novo**, o que
+torna o passo 4 essencial: vários deals por integrador é o padrão nesta base.
 
 A busca não depende do nome do campo: aceita qualquer string que seja um **CNPJ válido**
 (dígitos verificadores conferidos), com preferência para campos rotulados "cnpj". Isso
