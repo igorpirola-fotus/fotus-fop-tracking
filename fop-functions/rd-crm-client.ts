@@ -201,6 +201,29 @@ export async function listWonDeals(
   return [];
 }
 
+/**
+ * Metadados da listagem de deals ganhos, para dimensionar o backfill antes de
+ * rodá-lo: quantas páginas/registros existem. Uma única chamada, sem varrer.
+ * Devolve o envelope cru (links/meta) porque o formato varia entre versões da
+ * API — quem chama inspeciona o que veio.
+ */
+export async function wonDealsMeta(): Promise<Record<string, unknown>> {
+  const token = await getAccessToken();
+  const qs = new URLSearchParams({
+    "filter": "status:won",
+    "page[number]": "1",
+    "page[size]": "1",
+  });
+  const res = await fetch(`${RD_API}/crm/v2/deals?${qs.toString()}`, {
+    headers: { Authorization: `Bearer ${token}`, Accept: "application/json" },
+  });
+  if (!res.ok) throw new Error(`RD CRM meta deals → ${res.status}`);
+  const body = await res.json() as Record<string, unknown>;
+  // Sem o `data`, que é o deal em si — aqui só interessa paginação/contagem.
+  const { data: _data, ...resto } = body;
+  return resto;
+}
+
 interface ResolvedCnpj {
   cnpj: string;
   fonte: string;

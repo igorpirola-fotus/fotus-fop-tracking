@@ -4,7 +4,7 @@
 import { insert, logError, one, q, update } from "./db.ts";
 import { buildUserData, normalizePhone, sendToCAPI } from "./capi-sender.ts";
 import { sendToGA4 } from "./ga4-sender.ts";
-import { resolveDealCnpj } from "./rd-crm-client.ts";
+import { resolveDealCnpj, wonDealsMeta } from "./rd-crm-client.ts";
 import { cleanCnpj, findCnpjDeep } from "./cnpj.ts";
 import { backfillWon } from "./backfill-integradores.ts";
 
@@ -646,6 +646,12 @@ async function backfillHandler(req: Request): Promise<Response> {
     }
 
     const body = await req.json().catch(() => ({})) as Record<string, unknown>;
+
+    // Dimensiona antes de varrer: 1 chamada devolve a paginação da listagem.
+    if (body.count_only === true) {
+      return json({ success: true, meta: await wonDealsMeta() });
+    }
+
     const result = await backfillWon({
       page: Number(body.page) || 1,
       pagesPerRun: Number(body.pages_per_run) || 3,
