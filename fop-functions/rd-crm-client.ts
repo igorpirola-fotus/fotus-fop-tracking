@@ -243,6 +243,17 @@ interface ResolvedCnpj {
   cnpj: string;
   fonte: string;
   orgId: string | null;
+  orgName: string | null;
+}
+
+/** Procura o id da organização no objeto que já temos em mão. */
+function extractOrgId(obj: unknown): string | null {
+  if (!obj || typeof obj !== "object") return null;
+  const o = obj as Record<string, unknown>;
+  const doc = (o.document as Record<string, unknown> | undefined) ?? o;
+  const org = doc.organization as Record<string, unknown> | undefined;
+  const id = org?.id ?? doc.organization_id ?? o.organization_id;
+  return id ? String(id) : null;
 }
 
 /**
@@ -260,11 +271,13 @@ export async function resolveDealCnpj(
   rdDealId: string,
   webhookPayload: unknown,
 ): Promise<ResolvedCnpj> {
-  // 1. Payload do webhook.
+  // 1. Payload que já temos em mão (webhook ou item da listagem) — grátis.
   const fromPayload = findCnpjDeep(webhookPayload);
-  if (fromPayload) return { cnpj: fromPayload, fonte: "webhook_payload", orgId: null };
+  if (fromPayload) {
+    return { cnpj: fromPayload, fonte: "webhook_payload", orgId: null, orgName: null };
+  }
 
-  if (!rdDealId) return { cnpj: "", fonte: "sem_deal_id", orgId: null };
+  if (!rdDealId) return { cnpj: "", fonte: "sem_deal_id", orgId: null, orgName: null };
 
   // 2. Cache (positivo e negativo).
   const cached = await one<{ cnpj: string | null; org_id: string | null; fresh: boolean }>(
@@ -273,19 +286,24 @@ export async function resolveDealCnpj(
     [rdDealId, String(CACHE_TTL_HOURS)],
   );
   if (cached?.fresh) {
-    return { cnpj: cached.cnpj ?? "", fonte: "cache", orgId: cached.org_id };
+    return { cnpj: cached.cnpj ?? "", fonte: "cache", orgId: cached.org_id, orgName: null };
   }
 
-  // 3. Deal completo.
-  let orgId: string | null = null;
+  // 3. Descobrir a organização. A LISTAGEM de deals (backfill) já traz
+  //    `organization_id`, então ali esta chamada é dispensável — o que muda o
+  //    backfill de ~7h para a casa dos 30min em 51.661 deals. O webhook, por
+  //    outro lado, não traz o campo, e aí o GET do deal é inevitável.
+  let orgId = extractOrgId(webhookPayload);
   let cnpj = "";
-  let fonte = "deal_api";
+  let orgName: string | null = null;
+  let fonte = orgId ? "payload_org_id" : "deal_api";
 
-  const deal = await rdGet(`/crm/v2/deals/${rdDealId}`);
-  if (deal) {
-    const org = deal.organization as Record<string, unknown> | undefined;
-    orgId = (org?.id as string) || (deal.organization_id as string) || null;
-    cnpj = findCnpjDeep(deal);
+  if (!orgId) {
+    const deal = await rdGet(`/crm/v2/deals/${rdDealId}`);
+    if (deal) {
+      orgId = extractOrgId(deal);
+      cnpj = findCnpjDeep(deal);
+    }
   }
 
   // 4. Organização. Validado em 29/jul/2026 com deals reais: o deal NUNCA traz
@@ -308,6 +326,7 @@ export async function resolveDealCnpj(
       const organization = await rdGet(`/crm/v2/organizations/${orgId}`);
       if (organization) {
         cnpj = findCnpjDeep(organization);
+        orgName = (organization.name as string) || null;
         if (cnpj) fonte = "organization_api";
       }
     }
@@ -322,5 +341,10 @@ export async function resolveDealCnpj(
     [rdDealId, cnpj ? cleanCnpj(cnpj) : null, orgId, cnpj ? fonte : "nao_encontrado"],
   );
 
-  return { cnpj: cnpj ? cleanCnpj(cnpj) : "", fonte: cnpj ? fonte : "nao_encontrado", orgId };
+  return {
+    cnpj: cnpj ? cleanCnpj(cnpj) : "",
+    fonte: cnpj ? fonte : "nao_encontrado",
+    orgId,
+    orgName,
+  };
 }

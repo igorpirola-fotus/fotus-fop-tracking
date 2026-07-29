@@ -87,17 +87,21 @@ export async function backfillWon(opts: {
 
         if (throttleMs > 0) await new Promise((r) => setTimeout(r, throttleMs));
 
-        const { cnpj } = await resolveDealCnpj(dealId, deal);
+        const { cnpj, orgName } = await resolveDealCnpj(dealId, deal);
         if (!cnpj) {
           r.sem_cnpj++;
           continue;
         }
 
-        const valor = Number(deal.amount_total ?? deal.amount_unique ?? 0) || 0;
+        // ATENÇÃO aos nomes de campo: a LISTAGEM de deals usa `total_price` /
+        // `one_time_price`. O `amount_total` só aparece no payload do WEBHOOK.
+        // Verificado em 29/jul via sample_keys — ler o campo errado gravaria
+        // LTV zero para os 51.661 deals, silenciosamente.
+        const valor = Number(deal.total_price ?? deal.one_time_price ?? deal.amount_total ?? 0) || 0;
         const closedAt = (deal.closed_at as string) || (deal.updated_at as string) || null;
-        const razao = (deal.organization as Record<string, unknown> | undefined)?.name as
-          | string
-          | undefined;
+        // A listagem não traz a organização inline; o nome vem de quem resolveu
+        // o CNPJ (a consulta da organização) — e só preenche se ainda for nulo.
+        const razao = orgName ?? undefined;
 
         if (dryRun) {
           r.contabilizados++;
