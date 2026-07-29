@@ -26,7 +26,52 @@ Parte da migração Supabase → EasyPanel (ver `docs/superpowers/plans/DISCOVER
 | `GA4_MEASUREMENT_ID` | `G-XXXXXXXXXX` (opcional — sem ele, GA4 é pulado) |
 | `GA4_API_SECRET` | secret do Measurement Protocol (opcional) |
 | `RD_WEBHOOK_RECEIVER_TOKEN` | Bearer exigido na entrada do webhook do RD CRM — obrigatório p/ o `rd-sync` |
-| `RD_CRM_TOKEN` | token da API RD CRM v2 (opcional — usado só no fallback #3 de extração de CNPJ via consulta da organização) |
+| `RD_CRM_TOKEN` | access_token da API RD CRM v2 — usado só para **semear** `public.oauth_tokens` na primeira execução (depois o banco é a fonte da verdade) |
+| `RD_CRM_REFRESH_TOKEN` | refresh_token do RD CRM — idem, só para o seed inicial |
+| `RD_CRM_CLIENT_ID` | client_id do app CRM na AppStore do RD — **obrigatório** para o rd-sync resolver CNPJ |
+| `RD_CRM_CLIENT_SECRET` | client_secret do app CRM — **obrigatório** para o rd-sync resolver CNPJ |
+
+### Como o `rd-sync` resolve o CNPJ (e por que precisa da API do RD)
+O payload nativo do webhook de deal **não traz o CNPJ**: nem em `deal_custom_fields`,
+nem em `organization` / `contacts` / `organization_id` — esses três campos simplesmente
+não vêm. Auditoria de 29/jul/2026: **37.963 webhooks em 7 dias falharam com
+"cnpj obrigatório"** e a tabela `events` nunca recebeu um único evento de fundo de
+funil (`event_source = 'system_generated'`). Nenhum `Purchase` foi registrado.
+
+Ordem de resolução hoje (`rd-crm-client.ts` + `cnpj.ts`), do mais barato ao mais caro:
+1. varredura do payload do webhook (grátis);
+2. cache `public.rd_deal_cnpj_cache` — inclui *negative caching* (deal sem CNPJ não é reconsultado);
+3. `GET /crm/v2/deals/{id}` — o deal completo traz a organização;
+4. `GET /crm/v2/organizations/{org_id}` — quando o deal só devolve o id da empresa.
+
+A busca não depende do nome do campo: aceita qualquer string que seja um **CNPJ válido**
+(dígitos verificadores conferidos), com preferência para campos rotulados "cnpj". Isso
+evita depender de um label do CRM que já mudou de lugar duas vezes.
+
+**Token:** o access_token do CRM expira em 2h e o refresh_token é **rotativo** (cada uso
+invalida o anterior; 14 dias sem uso e morre). O par vive em `public.oauth_tokens` e a
+renovação é serializada por advisory lock do Postgres — dois refreshes concorrentes
+derrubariam a credencial. Depois do seed, **o container é o dono do token**: scripts
+locais que ainda usem `RD_CRM_REFRESH_TOKEN` do `.env` vão falhar com `invalid_grant`.
+
+**Rate limit:** 120 req/min no CRM contra picos de 10k webhooks/hora → o cache é o que
+segura; o `429` respeita o header `Retry-After`.
+
+### Status da fila `rdstation_crm_webhook_events`
+| status | significado |
+|---|---|
+| `processed` | evento gerado (ou já existia — idempotência por `event_id`) |
+| `skipped` | etapa fora do `STAGE_TO_EVENT` — não vira evento por design |
+| `skipped_no_cnpj` | deal sem CNPJ em lugar nenhum (dado ausente no CRM, não erro) |
+| `skipped_sem_integrador` | CNPJ resolvido, mas a empresa não existe em `public.integradores` |
+| `failed` | erro real (API do RD fora, token inválido) — **é o que o reprocessamento pega** |
+
+### Reprocessar a fila
+Workflow n8n `[ULTRON] rd-sync — reprocessar fila (MANUAL)` (`7x2Yri8bT2uteSRO`,
+inativo, trigger manual). Ele reenvia o payload salvo com `reprocess: true` — sem essa
+flag o servidor trataria como duplicado (o `dedup_key` já existe) e ignoraria. O
+`received_at` original da fila é preservado, e a idempotência final continua vindo do
+`event_id` determinístico em `public.events`.
 
 ## Deploy no EasyPanel (via API tRPC ou UI)
 1. Serviço **App** no projeto `fotus`, nome ex. `fop-functions`.

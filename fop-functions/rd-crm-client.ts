@@ -1,0 +1,244 @@
+// rd-crm-client.ts — cliente da API do RD Station CRM v2 para o rd-sync.
+//
+// Resolve o problema achado na auditoria de 29/jul/2026: o webhook de deal do RD
+// não traz o CNPJ (nem `organization`, nem `contacts`, nem `organization_id`),
+// então o rd-sync falhava em 100% dos deals em etapa mapeada e nunca gerava
+// Contact/Schedule/AddToCart/Purchase. Aqui buscamos o deal completo na API — que
+// traz a organização — e daí extraímos o CNPJ.
+//
+// Três cuidados que o caminho antigo não tinha:
+//  1. TOKEN: o access_token do CRM expira em 2h e o refresh_token é ROTATIVO
+//     (cada uso invalida o anterior; 14 dias sem uso e morre). O par fica em
+//     public.oauth_tokens e a renovação é serializada por advisory lock, senão
+//     dois refreshes concorrentes derrubam a credencial.
+//  2. RATE LIMIT: 120 req/min no CRM, contra picos de 10k webhooks/hora →
+//     cache deal→CNPJ (com negative caching) e respeito ao Retry-After no 429.
+//  3. FALHA ISOLADA: nada aqui pode derrubar o recebimento do webhook; quem
+//     chama trata "" como "não resolvido" e marca a linha para reprocessar.
+
+import { one, q, withAdvisoryLock } from "./db.ts";
+import { cleanCnpj, findCnpjDeep } from "./cnpj.ts";
+
+const RD_API = "https://api.rd.services";
+const PROVIDER = "rd_crm";
+/** Chave arbitrária e estável do advisory lock do refresh (só precisa ser única). */
+const LOCK_KEY_TOKEN_REFRESH = 815_2026;
+/** Renova um pouco antes de expirar para não perder corrida com a borda. */
+const RENEW_MARGIN_MS = 5 * 60 * 1000;
+/** Idade máxima do cache deal→CNPJ (deal pode trocar de empresa). */
+const CACHE_TTL_HOURS = 24 * 7;
+
+interface TokenRow {
+  access_token: string;
+  refresh_token: string;
+  expires_at: string;
+}
+
+/** Single-flight por instância: evita N refreshes simultâneos no mesmo container. */
+let inflightRefresh: Promise<string> | null = null;
+
+/**
+ * Access token válido do RD CRM. Renova (e persiste o novo par) quando preciso.
+ * Semeia a tabela a partir das envs na primeira execução.
+ */
+export async function getAccessToken(): Promise<string> {
+  const row = await one<TokenRow>(
+    "SELECT access_token, refresh_token, expires_at FROM public.oauth_tokens WHERE provider = $1",
+    [PROVIDER],
+  );
+
+  if (!row) {
+    // Seed inicial: envs setadas manualmente no EasyPanel.
+    const at = Deno.env.get("RD_CRM_TOKEN");
+    const rt = Deno.env.get("RD_CRM_REFRESH_TOKEN");
+    if (!at || !rt) {
+      throw new Error(
+        "oauth_tokens sem registro rd_crm e envs RD_CRM_TOKEN/RD_CRM_REFRESH_TOKEN ausentes",
+      );
+    }
+    // expires_at no passado força um refresh imediato — o access token semeado
+    // pode já estar vencido (ele dura 2h).
+    await q(
+      `INSERT INTO public.oauth_tokens (provider, access_token, refresh_token, expires_at)
+       VALUES ($1, $2, $3, now() - interval '1 minute')
+       ON CONFLICT (provider) DO NOTHING`,
+      [PROVIDER, at, rt],
+    );
+    return await refreshAccessToken();
+  }
+
+  const expiresAt = new Date(row.expires_at).getTime();
+  if (Date.now() + RENEW_MARGIN_MS < expiresAt) return row.access_token;
+
+  return await refreshAccessToken();
+}
+
+async function refreshAccessToken(): Promise<string> {
+  if (inflightRefresh) return await inflightRefresh;
+
+  inflightRefresh = withAdvisoryLock(LOCK_KEY_TOKEN_REFRESH, async (run) => {
+    // Reler DENTRO do lock: outra instância pode ter renovado enquanto esperávamos.
+    const rows = await run<TokenRow>(
+      "SELECT access_token, refresh_token, expires_at FROM public.oauth_tokens WHERE provider = $1",
+      [PROVIDER],
+    );
+    const cur = rows[0];
+    if (!cur) throw new Error("oauth_tokens: registro rd_crm desapareceu");
+    if (Date.now() + RENEW_MARGIN_MS < new Date(cur.expires_at).getTime()) {
+      return cur.access_token;
+    }
+
+    const clientId = Deno.env.get("RD_CRM_CLIENT_ID");
+    const clientSecret = Deno.env.get("RD_CRM_CLIENT_SECRET");
+    if (!clientId || !clientSecret) {
+      throw new Error("RD_CRM_CLIENT_ID/RD_CRM_CLIENT_SECRET não definidos");
+    }
+
+    // Content-Type form-urlencoded é obrigatório neste endpoint (não aceita JSON).
+    const res = await fetch(`${RD_API}/oauth2/token`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        client_id: clientId,
+        client_secret: clientSecret,
+        refresh_token: cur.refresh_token,
+        grant_type: "refresh_token",
+      }),
+    });
+
+    if (!res.ok) {
+      const detail = (await res.text()).slice(0, 200);
+      throw new Error(`refresh do token RD CRM falhou (${res.status}): ${detail}`);
+    }
+
+    const data = await res.json() as {
+      access_token: string;
+      refresh_token?: string;
+      expires_in?: number;
+    };
+    const expiresIn = data.expires_in ?? 7200;
+
+    // O RD devolve refresh_token novo e invalida o antigo → gravar SEMPRE.
+    await run(
+      `UPDATE public.oauth_tokens
+          SET access_token = $2,
+              refresh_token = $3,
+              expires_at = now() + ($4 || ' seconds')::interval,
+              updated_at = now()
+        WHERE provider = $1`,
+      [PROVIDER, data.access_token, data.refresh_token ?? cur.refresh_token, String(expiresIn)],
+    );
+
+    return data.access_token;
+  }).finally(() => {
+    inflightRefresh = null;
+  });
+
+  return await inflightRefresh;
+}
+
+/**
+ * GET autenticado na API do CRM. Renova o token no 401 e respeita Retry-After
+ * no 429 (rate limit 120 req/min). Devolve null quando o recurso não existe.
+ */
+async function rdGet(path: string, attempt = 0): Promise<Record<string, unknown> | null> {
+  const token = await getAccessToken();
+  const res = await fetch(`${RD_API}${path}`, {
+    headers: { Authorization: `Bearer ${token}`, Accept: "application/json" },
+  });
+
+  if (res.ok) {
+    const body = await res.json();
+    return (body?.data ?? body) as Record<string, unknown>;
+  }
+
+  if (res.status === 404) return null;
+
+  if (res.status === 401 && attempt === 0) {
+    // Token pode ter sido revogado antes do vencimento previsto: força refresh.
+    await q(
+      "UPDATE public.oauth_tokens SET expires_at = now() - interval '1 minute' WHERE provider = $1",
+      [PROVIDER],
+    );
+    return await rdGet(path, attempt + 1);
+  }
+
+  if (res.status === 429 && attempt < 2) {
+    const retryAfter = Number(res.headers.get("retry-after") ?? "2");
+    const waitMs = Math.min(Number.isFinite(retryAfter) ? retryAfter * 1000 : 2000, 10_000);
+    await new Promise((r) => setTimeout(r, waitMs));
+    return await rdGet(path, attempt + 1);
+  }
+
+  throw new Error(`RD CRM GET ${path} → ${res.status}`);
+}
+
+interface ResolvedCnpj {
+  cnpj: string;
+  fonte: string;
+  orgId: string | null;
+}
+
+/**
+ * Resolve o CNPJ de um deal, na ordem mais barata → mais cara:
+ *   1. o próprio payload do webhook (grátis)
+ *   2. cache public.rd_deal_cnpj_cache (grátis; inclui negative caching)
+ *   3. GET /crm/v2/deals/{id} — o deal completo traz a organização
+ *   4. GET /crm/v2/organizations/{org_id} — quando o deal só traz o id da empresa
+ *
+ * Devolve cnpj "" quando o deal realmente não tem CNPJ. Nunca lança por
+ * indisponibilidade da API: nesse caso propaga o erro para quem chama decidir
+ * (o webhook fica marcado para reprocessamento).
+ */
+export async function resolveDealCnpj(
+  rdDealId: string,
+  webhookPayload: unknown,
+): Promise<ResolvedCnpj> {
+  // 1. Payload do webhook.
+  const fromPayload = findCnpjDeep(webhookPayload);
+  if (fromPayload) return { cnpj: fromPayload, fonte: "webhook_payload", orgId: null };
+
+  if (!rdDealId) return { cnpj: "", fonte: "sem_deal_id", orgId: null };
+
+  // 2. Cache (positivo e negativo).
+  const cached = await one<{ cnpj: string | null; org_id: string | null; fresh: boolean }>(
+    `SELECT cnpj, org_id, (updated_at > now() - ($2 || ' hours')::interval) AS fresh
+       FROM public.rd_deal_cnpj_cache WHERE rd_deal_id = $1`,
+    [rdDealId, String(CACHE_TTL_HOURS)],
+  );
+  if (cached?.fresh) {
+    return { cnpj: cached.cnpj ?? "", fonte: "cache", orgId: cached.org_id };
+  }
+
+  // 3. Deal completo.
+  let orgId: string | null = null;
+  let cnpj = "";
+  let fonte = "deal_api";
+
+  const deal = await rdGet(`/crm/v2/deals/${rdDealId}`);
+  if (deal) {
+    const org = deal.organization as Record<string, unknown> | undefined;
+    orgId = (org?.id as string) || (deal.organization_id as string) || null;
+    cnpj = findCnpjDeep(deal);
+  }
+
+  // 4. Organização, quando o deal só devolveu o id.
+  if (!cnpj && orgId) {
+    const organization = await rdGet(`/crm/v2/organizations/${orgId}`);
+    if (organization) {
+      cnpj = findCnpjDeep(organization);
+      if (cnpj) fonte = "organization_api";
+    }
+  }
+
+  await q(
+    `INSERT INTO public.rd_deal_cnpj_cache (rd_deal_id, cnpj, org_id, fonte, updated_at)
+     VALUES ($1, $2, $3, $4, now())
+     ON CONFLICT (rd_deal_id) DO UPDATE
+        SET cnpj = EXCLUDED.cnpj, org_id = EXCLUDED.org_id,
+            fonte = EXCLUDED.fonte, updated_at = now()`,
+    [rdDealId, cnpj ? cleanCnpj(cnpj) : null, orgId, cnpj ? fonte : "nao_encontrado"],
+  );
+
+  return { cnpj: cnpj ? cleanCnpj(cnpj) : "", fonte: cnpj ? fonte : "nao_encontrado", orgId };
+}

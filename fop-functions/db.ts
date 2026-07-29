@@ -80,6 +80,37 @@ export async function update(
   await q(sql, args);
 }
 
+/**
+ * Roda `fn` com um advisory lock transacional do Postgres, na MESMA conexão.
+ * Serializa uma seção crítica entre réplicas do container (ex.: o refresh do
+ * token OAuth do RD CRM, cujo refresh_token é rotativo — dois refreshes
+ * concorrentes invalidam um ao outro).
+ *
+ * O lock é liberado no COMMIT/ROLLBACK, então não vaza se `fn` lançar.
+ */
+export async function withAdvisoryLock<T>(
+  key: number,
+  fn: (run: <R = Record<string, unknown>>(sql: string, args?: unknown[]) => Promise<R[]>) => Promise<T>,
+): Promise<T> {
+  const c = await pool.connect();
+  const run = async <R = Record<string, unknown>>(sql: string, args: unknown[] = []): Promise<R[]> => {
+    const r = await c.queryObject<R>(sql, args);
+    return r.rows;
+  };
+  try {
+    await c.queryObject("BEGIN");
+    await c.queryObject("SELECT pg_advisory_xact_lock($1)", [key]);
+    const out = await fn(run);
+    await c.queryObject("COMMIT");
+    return out;
+  } catch (e) {
+    try { await c.queryObject("ROLLBACK"); } catch (_) { /* conexão já morta */ }
+    throw e;
+  } finally {
+    c.release();
+  }
+}
+
 /** Log de erro — nunca lança (o log não pode quebrar o handler). */
 export async function logError(
   functionName: string,

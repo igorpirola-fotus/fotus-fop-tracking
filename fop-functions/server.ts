@@ -4,6 +4,8 @@
 import { insert, logError, one, q, update } from "./db.ts";
 import { buildUserData, normalizePhone, sendToCAPI } from "./capi-sender.ts";
 import { sendToGA4 } from "./ga4-sender.ts";
+import { resolveDealCnpj } from "./rd-crm-client.ts";
+import { cleanCnpj, findCnpjDeep } from "./cnpj.ts";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -354,62 +356,80 @@ async function rdSync(req: Request): Promise<Response> {
         ? `rdstation:${body.event_name}:${entityId}:${updatedAt}`
         : `rdstation:${body.event_name}:payload:${await sha256Hex(JSON.stringify(body))}`;
 
-      const inserted = await insert("public.rdstation_crm_webhook_events", {
-        dedup_key: dedupKey,
-        event_name: body.event_name as string,
-        entity_id: entityId,
-        payload: JSON.stringify(body),
-        processing_status: "processing",
-        received_at: new Date().toISOString(),
-      }, { onConflict: "dedup_key", conflictDoNothing: true, returning: "id" });
+      // Modo reprocessamento: a linha da fila JÁ existe (foi recebida antes e
+      // ficou failed/skipped_no_cnpj). Reenviar o payload cru cairia no dedup e
+      // seria ignorado — então aqui pulamos o insert e seguimos direto para o
+      // processamento, preservando o `received_at` original da fila.
+      // Usado pelo workflow n8n de reprocessamento em lote.
+      const isReprocess = body.reprocess === true;
 
-      // insert null = conflito de dedup_key = evento já processado → skip silencioso
-      if (!inserted) {
-        return json({ skipped: true, reason: "duplicate_event", dedup_key: dedupKey }, 200);
-      }
+      if (!isReprocess) {
+        const inserted = await insert("public.rdstation_crm_webhook_events", {
+          dedup_key: dedupKey,
+          event_name: body.event_name as string,
+          entity_id: entityId,
+          payload: JSON.stringify(body),
+          processing_status: "processing",
+          received_at: new Date().toISOString(),
+        }, { onConflict: "dedup_key", conflictDoNothing: true, returning: "id" });
 
-      // Extrair CNPJ — 4 fallbacks
-      const cnpjField = (((doc.deal_custom_fields as unknown[]) || []).find((f) => {
-        const field = f as Record<string, unknown>;
-        return (field.custom_field as Record<string, unknown>)?.label
-          ?.toString().toLowerCase().includes("cnpj");
-      })) as Record<string, unknown> | undefined;
-      cnpj = (cnpjField?.value as string) || "";
-
-      if (!cnpj) {
-        const org = doc.organization as Record<string, unknown> | undefined;
-        if (org?.custom_fields) {
-          const orgFields = org.custom_fields as Record<string, unknown>;
-          const cnpjKey = Object.keys(orgFields).find((k) => k.includes("cnpj"));
-          if (cnpjKey) cnpj = (orgFields[cnpjKey] as string) || "";
+        // insert null = conflito de dedup_key = evento já processado → skip silencioso
+        if (!inserted) {
+          return json({ skipped: true, reason: "duplicate_event", dedup_key: dedupKey }, 200);
+        }
+      } else {
+        // A idempotência no reprocessamento vem do event_id determinístico em
+        // public.events: um evento já enviado ao Meta não é reenviado.
+        const exists = await one<{ dedup_key: string }>(
+          "SELECT dedup_key FROM public.rdstation_crm_webhook_events WHERE dedup_key = $1",
+          [dedupKey],
+        );
+        if (!exists) {
+          return json({ error: "reprocess sem linha correspondente na fila", dedup_key: dedupKey }, 404);
         }
       }
 
-      if (!cnpj && doc.organization_id) {
-        try {
-          const rdCrmToken = Deno.env.get("RD_CRM_TOKEN");
-          if (rdCrmToken) {
-            const orgRes = await fetch(
-              `https://api.rd.services/crm/v2/organizations/${doc.organization_id}`,
-              { headers: { Authorization: `Bearer ${rdCrmToken}`, Accept: "application/json, text/event-stream" } },
-            );
-            if (orgRes.ok) {
-              const orgJson = await orgRes.json();
-              const orgData = orgJson.data || orgJson;
-              const orgFields = (orgData.custom_fields as Record<string, unknown>) || {};
-              const cnpjKey = Object.keys(orgFields).find((k) => k.includes("cnpj"));
-              if (cnpjKey) cnpj = (orgFields[cnpjKey] as string) || "";
-            }
-          }
-        } catch (apiErr) {
-          console.error("rd-sync: erro consulta organização:", (apiErr as Error).message);
-        }
+      // Etapa fora do STAGE_TO_EVENT não vira evento — marcar `skipped`, não
+      // `processed`. Antes ia como "processed" e inflava a saúde da fila
+      // (6.6k "processed"/dia sem um único evento gerado — auditoria 29/jul).
+      if (!STAGE_TO_EVENT[stage.toLowerCase().trim()]) {
+        await update("public.rdstation_crm_webhook_events",
+          { processing_status: "skipped", processed_at: new Date().toISOString() },
+          "dedup_key", dedupKey);
+        return json({ skipped: true, reason: `etapa '${stage}' fora do mapa de eventos` }, 200);
+      }
+
+      // CNPJ — o payload nativo do webhook NÃO traz `organization`, `contacts`
+      // nem `organization_id` (auditoria 29/jul/2026), e o CNPJ não está em
+      // `deal_custom_fields`. Resolvemos via API do CRM (deal completo →
+      // organização), com cache e negative caching por deal.
+      let cnpjFonte: string;
+      try {
+        const resolved = await resolveDealCnpj(entityId || "", body);
+        cnpj = resolved.cnpj;
+        cnpjFonte = resolved.fonte;
+      } catch (resolveErr) {
+        // API do RD fora, token revogado, rate limit estourado: o payload está
+        // ok, o ambiente não. Fica `failed` para o reprocessamento em lote.
+        const msg = `resolver CNPJ do deal ${entityId}: ${(resolveErr as Error).message}`;
+        await update("public.rdstation_crm_webhook_events",
+          { processing_status: "failed", error_message: msg },
+          "dedup_key", dedupKey);
+        await logError("rd-sync", msg);
+        return json({ success: false, retryable: true, error: msg }, 200);
       }
 
       if (!cnpj) {
-        const orgName = ((doc.organization as Record<string, unknown>)?.name as string) || "";
-        const match = orgName.match(/(\d{14})/);
-        if (match) cnpj = match[1];
+        // Deal sem CNPJ em lugar nenhum: não é erro recuperável, é dado ausente
+        // no CRM. Status próprio para não se misturar com falha de execução.
+        await update("public.rdstation_crm_webhook_events",
+          {
+            processing_status: "skipped_no_cnpj",
+            processed_at: new Date().toISOString(),
+            error_message: `deal ${entityId} sem CNPJ (fonte consultada: ${cnpjFonte})`,
+          },
+          "dedup_key", dedupKey);
+        return json({ skipped: true, reason: "deal sem CNPJ" }, 200);
       }
 
       const contact = (((doc.contacts as unknown[]) || [])[0] as Record<string, unknown>) || {};
@@ -429,15 +449,26 @@ async function rdSync(req: Request): Promise<Response> {
           "dedup_key", dedupKey);
         return json({ success: true, ...result }, 200);
       } catch (procError) {
+        const msg = (procError as Error).message;
+        // Integrador inexistente no fop-db não é falha de execução: é deal de
+        // empresa que nunca passou pelo funil rastreado (a base tem ~2k
+        // integradores contra ~12k deals). Status próprio e sem error_logs,
+        // senão a tabela vira ruído de dezenas de milhares de linhas/dia.
+        const semIntegrador = msg.includes("não encontrado");
         await update("public.rdstation_crm_webhook_events",
-          { processing_status: "failed", error_message: (procError as Error).message },
+          {
+            processing_status: semIntegrador ? "skipped_sem_integrador" : "failed",
+            ...(semIntegrador ? { processed_at: new Date().toISOString() } : {}),
+            error_message: msg,
+          },
           "dedup_key", dedupKey);
+        if (semIntegrador) return json({ skipped: true, reason: msg }, 200);
         throw procError;
       }
     } else {
       // Formato interno normalizado (testes/chamadas manuais) — sem dedup
       stage = (body.stage as string) || "";
-      cnpj = (body.cnpj as string) || "";
+      cnpj = (body.cnpj as string) || findCnpjDeep(body);
       email = (body.email as string) || "";
       phone = (body.phone as string) || "";
       nome = (body.nome as string) || "";
@@ -466,7 +497,7 @@ async function processRdEvent(params: {
   const eventName = STAGE_TO_EVENT[stage.toLowerCase().trim()];
   if (!eventName) return { event: "skipped", capi: false };
 
-  const cnpjClean = cnpj.replace(/\D/g, "");
+  const cnpjClean = cleanCnpj(cnpj);
   if (!cnpjClean) throw new Error("cnpj obrigatório");
 
   const integrador = await one<{
