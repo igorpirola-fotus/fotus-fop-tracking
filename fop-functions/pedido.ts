@@ -15,6 +15,36 @@
 
 const RX_PEDIDO = /pedido/i;
 
+/**
+ * Normaliza o número do pedido para o padrão do ERP: `<6-8 dígitos>-<2 dígitos>`.
+ *
+ * Regra definida pelo Igor (30/jul/2026) a partir do que apareceu no CRM:
+ *   • falta o hífen (`1486589 98`, `148658998`) → INSERE o hífen
+ *   • fora do padrão (`00`, `01`, `11111111111`, `13.402`) → DESCARTA (devolve "")
+ *
+ * Medido na conciliação: 364 dos 32.995 números do CRM eram lixo digitado, e
+ * recuperar os que só perderam o hífen devolveu 71 pedidos ao de-para. Sem o
+ * descarte, o lixo entra na conciliação como "pedido que não existe no ERP".
+ */
+export function normalizeNumeroPedido(raw: unknown): string {
+  if (raw === null || raw === undefined) return "";
+  const bruto = String(raw).trim();
+  if (!bruto) return "";
+
+  // Já no padrão, com qualquer separador (hífen, espaço, barra, ponto).
+  const comSeparador = bruto.match(/^(\d{6,8})[\s\-./]+(\d{2})$/);
+  if (comSeparador) return `${comSeparador[1]}-${comSeparador[2]}`;
+
+  // Só dígitos: os 2 últimos são o sufixo do ERP.
+  const soDigitos = bruto.replace(/\D/g, "");
+  if (/^\d+$/.test(bruto) && soDigitos.length >= 8 && soDigitos.length <= 10) {
+    return `${soDigitos.slice(0, -2)}-${soDigitos.slice(-2)}`;
+  }
+
+  // Qualquer outra coisa é preenchimento inválido — não se adivinha pedido.
+  return "";
+}
+
 /** Número do pedido, ou "" quando o deal não tem. */
 export function extractNumeroPedido(deal: unknown): string {
   if (!deal || typeof deal !== "object") return "";
@@ -28,8 +58,8 @@ export function extractNumeroPedido(deal: unknown): string {
       const f = item as Record<string, unknown>;
       const label = (f.custom_field as Record<string, unknown> | undefined)?.label;
       if (typeof label === "string" && RX_PEDIDO.test(label)) {
-        const v = f.value;
-        if (v !== null && v !== undefined && String(v).trim() !== "") return String(v).trim();
+        const norm = normalizeNumeroPedido(f.value);
+        if (norm) return norm;
       }
     }
   }
@@ -38,8 +68,9 @@ export function extractNumeroPedido(deal: unknown): string {
   const obj = doc.custom_fields as Record<string, unknown> | undefined;
   if (obj && typeof obj === "object") {
     for (const [k, v] of Object.entries(obj)) {
-      if (RX_PEDIDO.test(k) && v !== null && v !== undefined && String(v).trim() !== "") {
-        return String(v).trim();
+      if (RX_PEDIDO.test(k)) {
+        const norm = normalizeNumeroPedido(v);
+        if (norm) return norm;
       }
     }
   }
