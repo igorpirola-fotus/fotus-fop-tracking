@@ -17,6 +17,7 @@
 import { one, q } from "./db.ts";
 import { listWonDeals, resolveDealCnpj } from "./rd-crm-client.ts";
 import { extractPipelineId, isFunilDeVenda } from "./funis.ts";
+import { extractNumeroPedido, listarChavesCustomFields } from "./pedido.ts";
 
 export interface BackfillResult {
   pagina_inicial: number;
@@ -56,6 +57,7 @@ export async function preencherPipelines(opts: {
   atualizados: number;
   ja_tinham: number;
   fora_do_backfill: number;
+  chaves_vistas: string[];
   has_more: boolean;
   next_page: number;
 }> {
@@ -70,6 +72,7 @@ export async function preencherPipelines(opts: {
     atualizados: 0,
     ja_tinham: 0,
     fora_do_backfill: 0,
+    chaves_vistas: [] as string[],
     has_more: false,
     next_page: page,
   };
@@ -84,11 +87,21 @@ export async function preencherPipelines(opts: {
       const pipelineId = extractPipelineId(deal);
       if (!dealId || !pipelineId) continue;
 
+      const numeroPedido = extractNumeroPedido(deal);
+      if (!numeroPedido && r.chaves_vistas.length === 0) {
+        // Diagnostico: se o campo nao foi achado, devolve os NOMES das chaves
+        // disponiveis (nunca valores) para ajustar o slug sem outro deploy.
+        r.chaves_vistas = listarChavesCustomFields(deal);
+      }
+
       const upd = await one<{ rd_deal_id: string }>(
-        `UPDATE public.rd_won_backfill SET pipeline_id = $2
-          WHERE rd_deal_id = $1 AND pipeline_id IS NULL
+        `UPDATE public.rd_won_backfill
+            SET pipeline_id = COALESCE(pipeline_id, $2),
+                numero_pedido = COALESCE(numero_pedido, NULLIF($3, ''))
+          WHERE rd_deal_id = $1
+            AND (pipeline_id IS NULL OR numero_pedido IS NULL)
           RETURNING rd_deal_id`,
-        [dealId, pipelineId],
+        [dealId, pipelineId, numeroPedido],
       );
       if (upd) r.atualizados++;
       else {
@@ -216,9 +229,10 @@ export async function backfillWon(opts: {
         // Marca primeiro: se a soma falhar, o deal NÃO fica marcado (a linha é
         // removida no catch) — nunca o contrário, que perderia o pedido.
         await q(
-          `INSERT INTO public.rd_won_backfill (rd_deal_id, cnpj, valor, closed_at, pipeline_id)
-           VALUES ($1, $2, $3, $4, $5) ON CONFLICT (rd_deal_id) DO NOTHING`,
-          [dealId, cnpj, valor, closedAt, extractPipelineId(deal)],
+          `INSERT INTO public.rd_won_backfill
+             (rd_deal_id, cnpj, valor, closed_at, pipeline_id, numero_pedido)
+           VALUES ($1, $2, $3, $4, $5, NULLIF($6, '')) ON CONFLICT (rd_deal_id) DO NOTHING`,
+          [dealId, cnpj, valor, closedAt, extractPipelineId(deal), extractNumeroPedido(deal)],
         );
 
         try {
