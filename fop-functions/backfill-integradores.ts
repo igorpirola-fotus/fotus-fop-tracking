@@ -33,6 +33,89 @@ export interface BackfillResult {
   amostra_erros: string[];
 }
 
+/**
+ * Preenche `pipeline_id` nas linhas de `rd_won_backfill` gravadas ANTES da
+ * migration 009 — sem tocar em LTV nem em integradores.
+ *
+ * Por que é necessário: as 34.261 linhas do backfill de 2026 foram gravadas sem
+ * o funil, então não havia como saber quais vieram de "MKT Movimentação" (que
+ * não é venda) a não ser relistando. A listagem de deals traz `pipeline_id`, e
+ * relistar custa 1 chamada por página — barato o suficiente para varrer tudo e
+ * tornar a correção cirúrgica, em vez de zerar a base e recalcular às cegas.
+ */
+export async function preencherPipelines(opts: {
+  page?: number;
+  pagesPerRun?: number;
+  pageSize?: number;
+  desde?: string;
+  ate?: string;
+  throttleMs?: number;
+}): Promise<{
+  paginas_lidas: number;
+  deals_lidos: number;
+  atualizados: number;
+  ja_tinham: number;
+  fora_do_backfill: number;
+  has_more: boolean;
+  next_page: number;
+}> {
+  const pageSize = Math.min(Math.max(opts.pageSize ?? 200, 1), 200);
+  const pagesPerRun = Math.min(Math.max(opts.pagesPerRun ?? 10, 1), 60);
+  const throttleMs = Math.min(Math.max(opts.throttleMs ?? 600, 0), 5000);
+  let page = Math.max(opts.page ?? 1, 1);
+
+  const r = {
+    paginas_lidas: 0,
+    deals_lidos: 0,
+    atualizados: 0,
+    ja_tinham: 0,
+    fora_do_backfill: 0,
+    has_more: false,
+    next_page: page,
+  };
+
+  for (let i = 0; i < pagesPerRun; i++) {
+    const deals = await listWonDeals(page, pageSize, opts.desde, opts.ate);
+    r.paginas_lidas++;
+    r.deals_lidos += deals.length;
+
+    for (const deal of deals) {
+      const dealId = String(deal.id ?? "");
+      const pipelineId = extractPipelineId(deal);
+      if (!dealId || !pipelineId) continue;
+
+      const upd = await one<{ rd_deal_id: string }>(
+        `UPDATE public.rd_won_backfill SET pipeline_id = $2
+          WHERE rd_deal_id = $1 AND pipeline_id IS NULL
+          RETURNING rd_deal_id`,
+        [dealId, pipelineId],
+      );
+      if (upd) r.atualizados++;
+      else {
+        const existe = await one<{ rd_deal_id: string }>(
+          "SELECT rd_deal_id FROM public.rd_won_backfill WHERE rd_deal_id = $1",
+          [dealId],
+        );
+        if (existe) r.ja_tinham++;
+        else r.fora_do_backfill++;
+      }
+    }
+
+    if (deals.length < pageSize) {
+      r.has_more = false;
+      r.next_page = page;
+      return r;
+    }
+    page++;
+    // Só a listagem consome cota aqui (1 chamada por página).
+    if (throttleMs > 0) await new Promise((res) => setTimeout(res, throttleMs));
+  }
+
+  r.has_more = true;
+  r.next_page = page;
+  return r;
+}
+
 export async function backfillWon(opts: {
   page?: number;
   pagesPerRun?: number;

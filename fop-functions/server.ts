@@ -6,7 +6,7 @@ import { buildUserData, normalizePhone, sendToCAPI } from "./capi-sender.ts";
 import { sendToGA4 } from "./ga4-sender.ts";
 import { listWonDeals, resolveDealCnpj, wonDealsMeta } from "./rd-crm-client.ts";
 import { cleanCnpj, findCnpjDeep } from "./cnpj.ts";
-import { backfillWon } from "./backfill-integradores.ts";
+import { backfillWon, preencherPipelines } from "./backfill-integradores.ts";
 import { extractPipelineId, isFunilDeVenda } from "./funis.ts";
 
 const CORS = {
@@ -683,6 +683,20 @@ async function backfillHandler(req: Request): Promise<Response> {
         tem_contacts: Array.isArray(deal.contacts) && (deal.contacts as unknown[]).length > 0,
         tem_deal_custom_fields: Array.isArray(deal.deal_custom_fields),
       });
+    }
+
+    // Preenche pipeline_id nas linhas gravadas antes da migration 009. Só
+    // relista (1 chamada por página) — não toca em LTV nem em integradores.
+    if (body.preencher_pipelines === true) {
+      const r = await preencherPipelines({
+        page: Number(body.page) || 1,
+        pagesPerRun: Number(body.pages_per_run) || 10,
+        pageSize: Number(body.page_size) || 200,
+        desde: body.desde as string | undefined,
+        ate: body.ate as string | undefined,
+        throttleMs: body.throttle_ms === undefined ? undefined : Number(body.throttle_ms),
+      });
+      return json({ success: true, ...r });
     }
 
     // Dimensiona antes de varrer: 1 chamada devolve a paginação da listagem.
