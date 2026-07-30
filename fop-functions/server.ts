@@ -8,6 +8,7 @@ import { listWonDeals, resolveDealCnpj, wonDealsMeta } from "./rd-crm-client.ts"
 import { cleanCnpj, findCnpjDeep } from "./cnpj.ts";
 import { backfillWon, preencherPipelines } from "./backfill-integradores.ts";
 import { extractPipelineId, isFunilDeVenda } from "./funis.ts";
+import { resolverAtribuicaoDoDeal } from "./atribuicao.ts";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -555,6 +556,42 @@ async function processRdEvent(params: {
     [integrador.id],
   );
 
+  // ── Origem DESTE negócio ──────────────────────────────────────────────────
+  // Requisito do Igor (30/jul): cada deal preserva a UTM de origem DELE. Uma
+  // mesma empresa pode ter a 1ª compra vinda de google search, a 2ª de e-mail e
+  // a 3ª do WhatsApp do consultor — são negócios distintos, com fontes
+  // distintas. Atribuir tudo à primeira sessão do integrador daria todo o
+  // crédito ao google e apagaria os outros dois canais.
+  const atrib = await resolverAtribuicaoDoDeal({
+    deal: body,
+    integradorId: integrador.id,
+    criadoEm: ((body.document as Record<string, unknown> | undefined)?.created_at as string) ||
+      null,
+  });
+
+  // Registra a origem do negócio junto do pedido, para o LTV por canal sair
+  // por deal e não por empresa. Só grava se o deal já foi contabilizado pelo
+  // backfill (o registro existe); caso contrário não há linha para enriquecer.
+  if (rd_deal_id) {
+    await q(
+      `UPDATE public.rd_won_backfill
+          SET utm_source = COALESCE(utm_source, $2),
+              utm_medium = COALESCE(utm_medium, $3),
+              utm_campaign = COALESCE(utm_campaign, $4),
+              utm_content = COALESCE(utm_content, $5),
+              utm_term = COALESCE(utm_term, $6),
+              deal_source = COALESCE(deal_source, $7),
+              session_id = COALESCE(session_id, $8),
+              atribuicao_fonte = COALESCE(atribuicao_fonte, $9)
+        WHERE rd_deal_id = $1`,
+      [
+        rd_deal_id, atrib.utm_source, atrib.utm_medium, atrib.utm_campaign,
+        atrib.utm_content, atrib.utm_term, atrib.deal_source, atrib.session_id,
+        atrib.fonte,
+      ],
+    ).catch(() => {});
+  }
+
   const orderValue = deal_value;
   const updatePayload: Record<string, unknown> = {
     status: EVENT_TO_STATUS[finalEventName] || EVENT_TO_STATUS[eventName],
@@ -593,8 +630,10 @@ async function processRdEvent(params: {
     event_data: JSON.stringify(body),
     meta_capi_status: "pending",
     gclid: session?.gclid || null,
-    utm_source: session?.utm_source || null,
-    utm_campaign: session?.utm_campaign || null,
+    // UTM do NEGOCIO (ver resolverAtribuicaoDoDeal), com a sessao como fallback.
+    utm_source: atrib.utm_source || session?.utm_source || null,
+    utm_campaign: atrib.utm_campaign || session?.utm_campaign || null,
+    utm_content: atrib.utm_content || null,
   }, { onConflict: "event_id", conflictDoNothing: true });
 
   // ── Gate de sinal de mídia ────────────────────────────────────────────────

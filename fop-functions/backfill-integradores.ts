@@ -18,6 +18,7 @@ import { one, q } from "./db.ts";
 import { listWonDeals, resolveDealCnpj } from "./rd-crm-client.ts";
 import { extractPipelineId, isFunilDeVenda } from "./funis.ts";
 import { extractNumeroPedido, listarChavesCustomFields } from "./pedido.ts";
+import { extractUtmDoDeal } from "./atribuicao.ts";
 
 export interface BackfillResult {
   pagina_inicial: number;
@@ -94,14 +95,40 @@ export async function preencherPipelines(opts: {
         r.chaves_vistas = listarChavesCustomFields(deal);
       }
 
+      // Origem do NEGOCIO (nao do integrador): a listagem traz os custom
+      // fields de UTM, entao a mesma relistagem preenche a atribuicao.
+      const utm = extractUtmDoDeal(deal);
+      const potencia = Number(
+        (deal.custom_fields as Record<string, unknown> | undefined)?.["potencia"] ?? 0,
+      ) || null;
+
       const upd = await one<{ rd_deal_id: string }>(
         `UPDATE public.rd_won_backfill
-            SET pipeline_id = COALESCE(pipeline_id, $2),
-                numero_pedido = COALESCE(numero_pedido, NULLIF($3, ''))
+            SET pipeline_id   = COALESCE(pipeline_id, $2),
+                numero_pedido = COALESCE(numero_pedido, NULLIF($3, '')),
+                utm_source    = COALESCE(utm_source, $4),
+                utm_medium    = COALESCE(utm_medium, $5),
+                utm_campaign  = COALESCE(utm_campaign, $6),
+                utm_content   = COALESCE(utm_content, $7),
+                utm_term      = COALESCE(utm_term, $8),
+                deal_source   = COALESCE(deal_source, $9),
+                potencia_kwp  = COALESCE(potencia_kwp, $10),
+                criado_em     = COALESCE(criado_em, $11::timestamptz),
+                atribuicao_fonte = CASE
+                  WHEN atribuicao_fonte IS NOT NULL THEN atribuicao_fonte
+                  WHEN $4 IS NOT NULL OR $6 IS NOT NULL THEN 'crm_utm'
+                  ELSE NULL
+                END
           WHERE rd_deal_id = $1
-            AND (pipeline_id IS NULL OR numero_pedido IS NULL)
+            AND (pipeline_id IS NULL OR numero_pedido IS NULL
+                 OR criado_em IS NULL OR atribuicao_fonte IS NULL)
           RETURNING rd_deal_id`,
-        [dealId, pipelineId, numeroPedido],
+        [
+          dealId, pipelineId, numeroPedido,
+          utm.utm_source ?? null, utm.utm_medium ?? null, utm.utm_campaign ?? null,
+          utm.utm_content ?? null, utm.utm_term ?? null, utm.deal_source ?? null,
+          potencia, (deal.created_at as string) || null,
+        ],
       );
       if (upd) r.atualizados++;
       else {
@@ -230,9 +257,25 @@ export async function backfillWon(opts: {
         // removida no catch) — nunca o contrário, que perderia o pedido.
         await q(
           `INSERT INTO public.rd_won_backfill
-             (rd_deal_id, cnpj, valor, closed_at, pipeline_id, numero_pedido)
-           VALUES ($1, $2, $3, $4, $5, NULLIF($6, '')) ON CONFLICT (rd_deal_id) DO NOTHING`,
-          [dealId, cnpj, valor, closedAt, extractPipelineId(deal), extractNumeroPedido(deal)],
+             (rd_deal_id, cnpj, valor, closed_at, pipeline_id, numero_pedido,
+              utm_source, utm_medium, utm_campaign, utm_content, utm_term,
+              deal_source, potencia_kwp, criado_em, atribuicao_fonte)
+           VALUES ($1, $2, $3, $4, $5, NULLIF($6, ''), $7, $8, $9, $10, $11, $12, $13,
+                   $14::timestamptz,
+                   CASE WHEN $7 IS NOT NULL OR $9 IS NOT NULL THEN 'crm_utm' ELSE NULL END)
+           ON CONFLICT (rd_deal_id) DO NOTHING`,
+          (() => {
+            const u = extractUtmDoDeal(deal);
+            const pot = Number(
+              (deal.custom_fields as Record<string, unknown> | undefined)?.["potencia"] ?? 0,
+            ) || null;
+            return [
+              dealId, cnpj, valor, closedAt, extractPipelineId(deal), extractNumeroPedido(deal),
+              u.utm_source ?? null, u.utm_medium ?? null, u.utm_campaign ?? null,
+              u.utm_content ?? null, u.utm_term ?? null, u.deal_source ?? null,
+              pot, (deal.created_at as string) || null,
+            ];
+          })(),
         );
 
         try {
