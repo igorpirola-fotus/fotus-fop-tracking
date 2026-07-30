@@ -16,6 +16,7 @@
 // `public.rd_won_backfill` antes de somar. Rodar duas vezes não dobra o LTV.
 import { one, q } from "./db.ts";
 import { listWonDeals, resolveDealCnpj } from "./rd-crm-client.ts";
+import { extractPipelineId, isFunilDeVenda } from "./funis.ts";
 
 export interface BackfillResult {
   pagina_inicial: number;
@@ -24,6 +25,7 @@ export interface BackfillResult {
   contabilizados: number;
   ja_contabilizados: number;
   sem_cnpj: number;
+  funil_fora_escopo: number;
   erros: number;
   has_more: boolean;
   next_page: number;
@@ -57,6 +59,7 @@ export async function backfillWon(opts: {
     contabilizados: 0,
     ja_contabilizados: 0,
     sem_cnpj: 0,
+    funil_fora_escopo: 0,
     erros: 0,
     has_more: false,
     next_page: page,
@@ -74,6 +77,15 @@ export async function backfillWon(opts: {
       if (!dealId) continue;
 
       try {
+        // Funil que não é de venda não entra no histórico de compras. Checado
+        // ANTES do cache/API: é grátis (o pipeline_id vem na listagem) e é o
+        // filtro que impede um card de "MKT Movimentação" na etapa "Descarte"
+        // de virar pedido no LTV — foram 734 deals assim antes de 30/jul.
+        if (!isFunilDeVenda(deal)) {
+          r.funil_fora_escopo++;
+          continue;
+        }
+
         // Só registra depois de saber o CNPJ, mas verifica antes para não
         // gastar chamada de API em deal já contabilizado.
         const visto = await one<{ rd_deal_id: string }>(
@@ -121,9 +133,9 @@ export async function backfillWon(opts: {
         // Marca primeiro: se a soma falhar, o deal NÃO fica marcado (a linha é
         // removida no catch) — nunca o contrário, que perderia o pedido.
         await q(
-          `INSERT INTO public.rd_won_backfill (rd_deal_id, cnpj, valor, closed_at)
-           VALUES ($1, $2, $3, $4) ON CONFLICT (rd_deal_id) DO NOTHING`,
-          [dealId, cnpj, valor, closedAt],
+          `INSERT INTO public.rd_won_backfill (rd_deal_id, cnpj, valor, closed_at, pipeline_id)
+           VALUES ($1, $2, $3, $4, $5) ON CONFLICT (rd_deal_id) DO NOTHING`,
+          [dealId, cnpj, valor, closedAt, extractPipelineId(deal)],
         );
 
         try {

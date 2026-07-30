@@ -7,6 +7,7 @@ import { sendToGA4 } from "./ga4-sender.ts";
 import { listWonDeals, resolveDealCnpj, wonDealsMeta } from "./rd-crm-client.ts";
 import { cleanCnpj, findCnpjDeep } from "./cnpj.ts";
 import { backfillWon } from "./backfill-integradores.ts";
+import { extractPipelineId, isFunilDeVenda } from "./funis.ts";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -26,6 +27,7 @@ const CAPI_ENABLED = Deno.env.get("CAPI_ENABLED") === "true";
 // (sinal de mídia). Grava no banco sempre. Ver comentário no gate, em
 // processRdEvent. Default LIGADO — desligar só por decisão explícita.
 const REQUIRE_SESSION_FOR_CAPI = Deno.env.get("RD_SYNC_CAPI_REQUIRE_SESSION") !== "false";
+
 
 // ─────────────────────────── rd-sync: mapas ─────────────────────────────────
 // Etapa RD CRM → evento Meta/GA4 (chaves em lowercase; nomes reais das etapas — doc 11)
@@ -393,6 +395,22 @@ async function rdSync(req: Request): Promise<Response> {
         if (!exists) {
           return json({ error: "reprocess sem linha correspondente na fila", dedup_key: dedupKey }, 404);
         }
+      }
+
+      // Funil que não é de venda não gera evento de funil. Sem isso, um card de
+      // "MKT Movimentação" fechado como ganho na etapa "Descarte" viraria
+      // Purchase (levantado em 30/jul: 734 deals nessa situação).
+      if (!isFunilDeVenda(body)) {
+        const pipe = (doc.deal_pipeline as Record<string, unknown> | undefined)?.name ??
+          extractPipelineId(body) ?? "desconhecido";
+        await update("public.rdstation_crm_webhook_events",
+          {
+            processing_status: "skipped_funil_nao_venda",
+            processed_at: new Date().toISOString(),
+            error_message: `funil '${pipe}' nao conta como venda`,
+          },
+          "dedup_key", dedupKey);
+        return json({ skipped: true, reason: `funil '${pipe}' fora do escopo de venda` }, 200);
       }
 
       // Etapa fora do STAGE_TO_EVENT não vira evento — marcar `skipped`, não
