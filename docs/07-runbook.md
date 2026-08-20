@@ -2,6 +2,33 @@
 
 > Este documento é para o dia a dia após a implementação. Quem opera o projeto
 > deve ler isto antes de qualquer intervenção no sistema.
+>
+> **Nota (ago/2026):** parte das rotinas abaixo é da fase Supabase e está sendo
+> migrada para o `fop-functions` (EasyPanel) + `fop-db`. Comandos `supabase
+> functions ...` valem só para as Edge Functions antigas ainda ativas.
+
+---
+
+## Validar um número de mídia ANTES de reportar (checklist obrigatório)
+
+> Este checklist existe por causa do incidente de ago/2026 (falso "apagão").
+> Fonte-verdade e regra de ouro em `docs/09-fonte-verdade.md`.
+
+1. **Qual é a pergunta?** Ache a **fonte canônica** na tabela do `09-fonte-verdade.md`.
+   Não abra o ETL primeiro.
+2. **Puxe da plataforma ao vivo** (Meta Events Manager / Graph, Google Ads, GA4) no
+   **mesmo recorte de data e fuso** (America/Sao_Paulo, D-1). Confirme o **pixel certo**:
+   Fotus Solar V2 `1313389696600030`.
+3. **Confirme exatamente o que está contando** — `lead` vs `complete_registration` vs
+   custom conversion. No mesmo dia, o mesmo array de `actions` pode dar 16 ou 1070.
+4. **Se usar `eventos_normalizados`:** cheque `ultima_sync` e lembre que é **congelado em
+   D-1** (não maturado). Nunca use para "hoje/ontem recente" como se fosse final.
+5. **Receita? Só CRM (deal won).** Nunca `eventos_normalizados.receita_brl`.
+6. **Bata derivado × canônico.** Divergência acima do limiar (leads > 10% ou > 3 abs;
+   spend > 2%) = **não reporta, investiga**.
+7. **Antes de gritar "apagão/queda":** (a) o dia entrou? (b) maturou? (c) mudou
+   pixel/conta/naming/evento contado? (d) o Events Manager confirma? Se não passou nos
+   quatro, **não é queda — é medição**.
 
 ---
 
@@ -208,4 +235,4 @@ supabase db dump --data-only > backup_data_$(date +%Y%m%d).sql
 | RD Station | Central de ajuda RD + suporte via ticket |
 | WhatsApp API | Meta Business Support |
 | Google Ads | Suporte Google Ads (0800 na conta) |
-| ERP / Webhook ERP | Time de TI interno |
+| Purchase / OportunidadePerdida (deal Ganho/Perdido) | RD Station (webhook `rd-sync`) — não há webhook de ERP |

@@ -70,6 +70,7 @@ export async function sendToCAPI(params: {
   user_data: Record<string, unknown>;
   custom_data?: Record<string, unknown>;
   test_event_code?: string;
+  event_time?: number;
 }): Promise<{ success: boolean; eventId?: string; fbtrace_id?: string; error?: string }> {
   const pixelId = Deno.env.get("META_PIXEL_ID")!;
   const token = Deno.env.get("META_CAPI_TOKEN")!;
@@ -78,7 +79,7 @@ export async function sendToCAPI(params: {
   const payload = {
     data: [{
       event_name: params.event_name,
-      event_time: Math.floor(Date.now() / 1000),
+      event_time: params.event_time ?? Math.floor(Date.now() / 1000),
       event_id: params.event_id,
       event_source_url: params.event_source_url,
       action_source: params.action_source,

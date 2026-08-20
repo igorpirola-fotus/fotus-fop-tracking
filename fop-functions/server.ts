@@ -41,8 +41,8 @@ const STAGE_TO_EVENT: Record<string, string> = {
   "reunião agendada":  "AddToCart", // SDR → handoff Comercial
   "negociação":        "AddToCart", // BDR
   "orçamento":         "AddToCart", // Funil Comercial
-  "perdido":           "OportunidadePerdida",
-  "ganho":             "Purchase",  // deal won no RD
+  "__lost__":          "OportunidadePerdida", // derivado de status:lost (nao do nome da etapa)
+  "__won__":           "Purchase",            // derivado de status:won (nao do nome da etapa)
 };
 
 const EVENT_TO_STATUS: Record<string, string> = {
@@ -356,8 +356,11 @@ async function rdSync(req: Request): Promise<Response> {
       }
       const doc = body.document as Record<string, unknown>;
 
-      if (doc.status === "won") stage = "ganho";
-      else if (doc.status === "lost") stage = "perdido";
+      // Purchase/Perdida vem SO do status (nao do nome da etapa): havia uma etapa
+      // literalmente chamada "ganho" no Funil BDR que, com deal ainda aberto,
+      // virava Purchase falso. Sentinelas __won__/__lost__ so casam via status.
+      if (doc.status === "won") stage = "__won__";
+      else if (doc.status === "lost") stage = "__lost__";
       else stage = ((doc.deal_stage as Record<string, unknown>)?.name as string) || "";
 
       // Idempotência: dedup_key + persistência do raw event
@@ -543,7 +546,10 @@ async function processRdEvent(params: {
     finalEventName = isFirstOrder ? "Purchase" : "PurchaseRecorrente";
   }
 
-  const eventId = (await sha256Hex(`rd_${finalEventName}_${rd_deal_id}_${cnpjClean}`)).substring(0, 36);
+  // Purchase e PurchaseRecorrente do MESMO deal compartilham o event_id: sem isso,
+  // reprocessar o deal apos numero_pedidos mudar geraria 2 eventos (double-count).
+  const idKey = finalEventName === "PurchaseRecorrente" ? "Purchase" : finalEventName;
+  const eventId = (await sha256Hex(`rd_${idKey}_${rd_deal_id}_${cnpjClean}`)).substring(0, 36);
 
   const existingEvent = await one<{ id: string }>(
     "SELECT id FROM public.events WHERE event_id = $1", [eventId],
@@ -570,6 +576,18 @@ async function processRdEvent(params: {
     criadoEm: ((body.document as Record<string, unknown> | undefined)?.created_at as string) ||
       null,
   });
+
+  // Sessao que ORIGINOU este deal (via atribuicao), nao a mais recente do
+  // integrador: o fbp/fbc enviado ao Meta e o gate de midia devem refletir a
+  // origem do negocio. Usar a sessao mais recente casava a conversao ao clique
+  // errado e deixava recompra de carteira vazar como Purchase de midia por
+  // qualquer visita posterior.
+  const attribSession = atrib.session_id
+    ? await one<{ fbp: string | null; fbc: string | null }>(
+      "SELECT fbp, fbc FROM public.sessions WHERE session_id = $1",
+      [atrib.session_id],
+    )
+    : null;
 
   // Registra a origem do negócio junto do pedido, para o LTV por canal sair
   // por deal e não por empresa. Só grava se o deal já foi contabilizado pelo
@@ -618,8 +636,8 @@ async function processRdEvent(params: {
     nome: (nome || integrador.nome_contato) || undefined,
     estado: integrador.estado_operacao || undefined,
     cidade: integrador.cidade_operacao || undefined,
-    fbp: session?.fbp || undefined,
-    fbc: session?.fbc || undefined,
+    fbp: attribSession?.fbp || undefined,
+    fbc: attribSession?.fbc || undefined,
   });
 
   await insert("public.events", {
@@ -649,11 +667,22 @@ async function processRdEvent(params: {
   // aprendendo com sinal que a mídia não produziu.
   // Só desligue (RD_SYNC_CAPI_REQUIRE_SESSION=false) se a intenção for
   // deliberadamente medir TODA a receita no Meta, mídia ou não.
-  const temSinalDeMidia = !!session;
+  // Sinal de midia = a origem DESTE deal e midia (UTM no deal ou sessao anterior
+  // a ele), nao "o integrador tem alguma sessao". Isso impede recompra de
+  // carteira de vazar ao Meta so porque a empresa visitou a LP algum dia.
+  const temSinalDeMidia = atrib.fonte === "crm_utm" || atrib.fonte === "sessao_anterior";
   if (!temSinalDeMidia && REQUIRE_SESSION_FOR_CAPI) {
     await update("public.events", { meta_capi_status: "sem_sinal_midia" }, "event_id", eventId);
     return { event: finalEventName, capi: false };
   }
+
+  // event_time = quando o fato ocorreu no CRM (fechamento/mudanca de etapa), nao
+  // "agora": reprocessar/backfill nao pode jogar a conversao no dia errado, e o
+  // Meta rejeita eventos com mais de 7 dias.
+  const docRd = (body.document as Record<string, unknown> | undefined) ?? {};
+  const eventTimeIso = (docRd.closed_at as string) || (docRd.updated_at as string) ||
+    (docRd.created_at as string) || "";
+  const eventTime = eventTimeIso ? Math.floor(new Date(eventTimeIso).getTime() / 1000) : undefined;
 
   const capiResult = await sendToCAPI({
     event_name: finalEventName,
@@ -665,6 +694,7 @@ async function processRdEvent(params: {
       ...(eventName === "Purchase" && { currency: "BRL", value: orderValue }),
     },
     test_event_code: test_event_code || undefined,
+    event_time: eventTime,
   });
 
   await update("public.events", {
