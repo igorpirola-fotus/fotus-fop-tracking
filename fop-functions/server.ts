@@ -9,6 +9,7 @@ import { cleanCnpj, findCnpjDeep } from "./cnpj.ts";
 import { backfillWon, preencherPipelines } from "./backfill-integradores.ts";
 import { extractPipelineId, isFunilDeVenda } from "./funis.ts";
 import { resolverAtribuicaoDoDeal } from "./atribuicao.ts";
+import { buildResult, type Canal } from "./utm-builder.ts";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -762,6 +763,65 @@ async function backfillHandler(req: Request): Promise<Response> {
   }
 }
 
+// ─────────────────────────── UTM Builder ────────────────────────────────────
+// Porta as Edge Functions utm-config (GET) e generate-utm (POST) do Supabase
+// para o fop-db. O catálogo (codigos_*) e a tabela utm_links já vivem no fop-db.
+// Sem auth (como /track-event): é ferramenta interna de baixa sensibilidade
+// (lê catálogo + gera link). A tela estática consome estes dois endpoints.
+async function utmConfig(): Promise<Response> {
+  try {
+    const out: Record<string, unknown> = {};
+    for (const t of ["canal", "objetivo", "produto", "publico", "geo"]) {
+      // nome de tabela vem de allowlist fixa acima — não há injeção via input.
+      out[t] = await q(`SELECT * FROM public.codigos_${t} WHERE ativo = true ORDER BY ordem`);
+    }
+    return json(out);
+  } catch (error) {
+    await logError("utm-config", (error as Error).message);
+    return json({ error: (error as Error).message }, 500);
+  }
+}
+
+async function generateUtm(req: Request): Promise<Response> {
+  try {
+    const body = await req.json();
+
+    // Valida o canal contra a tabela-mestra (não confia no front).
+    const canalRow = await one<Canal & { codigo: string }>(
+      "SELECT * FROM public.codigos_canal WHERE codigo = $1 AND ativo = true",
+      [body.canal],
+    );
+    if (!canalRow) return json({ error: `canal inválido: ${body.canal}` }, 400);
+
+    const r = buildResult({
+      url_destino: body.url_destino,
+      canal: canalRow as Canal,
+      objetivo: body.objetivo, produto: body.produto, publico: body.publico,
+      geo: body.geo, periodo: body.periodo, content: body.content, term: body.term,
+    });
+
+    // Anti-duplicata por hash.
+    const existente = await one(
+      "SELECT * FROM public.utm_links WHERE hash_dedupe = $1",
+      [r.hash_dedupe],
+    );
+    if (existente) return json({ ...existente, status: "exists" });
+
+    const inserido = await insert("public.utm_links", {
+      criado_por: body.criado_por ?? null,
+      url_destino: body.url_destino,
+      utm_source: r.utm_source, utm_medium: r.utm_medium, utm_campaign: r.utm_campaign,
+      utm_content: r.utm_content || null, utm_term: r.utm_term || null, utm_id: r.utm_id,
+      funnel: r.funnel, plataforma: r.plataforma, url_final: r.url_final, hash_dedupe: r.hash_dedupe,
+    }, { returning: "*" });
+
+    return json({ ...inserido, gera_via: r.gera_via, tracking_value: r.tracking_value, status: "created" });
+  } catch (error) {
+    await logError("generate-utm", (error as Error).message);
+    return json({ error: (error as Error).message }, 500);
+  }
+}
+
 // ─────────────────────────── router ─────────────────────────────────────────
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: CORS });
@@ -776,6 +836,8 @@ Deno.serve(async (req: Request) => {
     }
   }
   if (path === "/track-event") return await trackEvent(req);
+  if (path === "/utm-config") return await utmConfig();
+  if (path === "/generate-utm") return await generateUtm(req);
   if (path === "/rd-sync") return await rdSync(req);
   if (path === "/backfill-integradores") return await backfillHandler(req);
   if (path === "/enrich-cnpj") return await enrichCnpjHandler(req);
