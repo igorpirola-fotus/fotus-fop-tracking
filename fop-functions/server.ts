@@ -800,22 +800,32 @@ async function generateUtm(req: Request): Promise<Response> {
       geo: body.geo, periodo: body.periodo, content: body.content, term: body.term,
     });
 
-    // Anti-duplicata por hash.
-    const existente = await one(
-      "SELECT * FROM public.utm_links WHERE hash_dedupe = $1",
+    // Anti-duplicata por hash. Não devolvemos a linha crua do banco: a coluna
+    // id é int8 → o driver Postgres do Deno a entrega como BigInt, que o
+    // JSON.stringify não serializa. Montamos a resposta a partir de `r` (tudo
+    // string), que é determinístico para os mesmos inputs.
+    const existe = await one<{ n: number }>(
+      "SELECT 1 AS n FROM public.utm_links WHERE hash_dedupe = $1 LIMIT 1",
       [r.hash_dedupe],
     );
-    if (existente) return json({ ...existente, status: "exists" });
+    if (!existe) {
+      await insert("public.utm_links", {
+        criado_por: body.criado_por ?? null,
+        url_destino: body.url_destino,
+        utm_source: r.utm_source, utm_medium: r.utm_medium, utm_campaign: r.utm_campaign,
+        utm_content: r.utm_content || null, utm_term: r.utm_term || null, utm_id: r.utm_id,
+        funnel: r.funnel, plataforma: r.plataforma, url_final: r.url_final, hash_dedupe: r.hash_dedupe,
+      });
+    }
 
-    const inserido = await insert("public.utm_links", {
-      criado_por: body.criado_por ?? null,
+    return json({
+      status: existe ? "exists" : "created",
       url_destino: body.url_destino,
       utm_source: r.utm_source, utm_medium: r.utm_medium, utm_campaign: r.utm_campaign,
-      utm_content: r.utm_content || null, utm_term: r.utm_term || null, utm_id: r.utm_id,
-      funnel: r.funnel, plataforma: r.plataforma, url_final: r.url_final, hash_dedupe: r.hash_dedupe,
-    }, { returning: "*" });
-
-    return json({ ...inserido, gera_via: r.gera_via, tracking_value: r.tracking_value, status: "created" });
+      utm_content: r.utm_content, utm_term: r.utm_term, utm_id: r.utm_id,
+      funnel: r.funnel, plataforma: r.plataforma, gera_via: r.gera_via,
+      tracking_value: r.tracking_value, url_final: r.url_final,
+    });
   } catch (error) {
     await logError("generate-utm", (error as Error).message);
     return json({ error: (error as Error).message }, 500);
