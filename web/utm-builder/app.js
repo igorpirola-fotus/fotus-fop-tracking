@@ -3,7 +3,7 @@
    Fase 1: client-side build + save via Edge Functions
    ───────────────────────────────────────────────────────────── */
 
-const API_BASE = "https://wttmlnhzvevtabjetsqz.supabase.co/functions/v1";
+const API_BASE = "https://fotus-fop-functions.mk863j.easypanel.host";
 const ANON     = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Ind0dG1sbmh6dmV2dGFiamV0c3F6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzg1NjMzMDksImV4cCI6MjA5NDEzOTMwOX0.M2nO3V7IZR4GZ5O_X4LBySoHiqb6slj9eprOxsWJNbE";
 
 const HEADERS = {
