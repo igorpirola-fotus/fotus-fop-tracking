@@ -10,6 +10,7 @@ import { backfillWon, preencherPipelines } from "./backfill-integradores.ts";
 import { extractPipelineId, isFunilDeVenda } from "./funis.ts";
 import { resolverAtribuicaoDoDeal } from "./atribuicao.ts";
 import { buildResult, type Canal } from "./utm-builder.ts";
+import { buildAppleLink, buildPlayLink, buildSmartLink, slug } from "./app-links.ts";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -782,6 +783,17 @@ async function utmConfig(): Promise<Response> {
   }
 }
 
+// Campos extras (source_platform/creative_format) entram como parâmetros
+// adicionais no link, NUNCA no utm_campaign. final_url_suffix não recebe query.
+function urlFinalExtras(r: { url_final: string; gera_via: string }, body: Record<string, unknown>): string {
+  if (r.gera_via === "final_url_suffix") return r.url_final;
+  const extras: string[] = [];
+  if (body.utm_source_platform) extras.push("utm_source_platform=" + encodeURIComponent(String(body.utm_source_platform)));
+  if (body.utm_creative_format) extras.push("utm_creative_format=" + encodeURIComponent(String(body.utm_creative_format)));
+  if (!extras.length) return r.url_final;
+  return r.url_final + (r.url_final.includes("?") ? "&" : "?") + extras.join("&");
+}
+
 async function generateUtm(req: Request): Promise<Response> {
   try {
     const body = await req.json();
@@ -814,7 +826,10 @@ async function generateUtm(req: Request): Promise<Response> {
         url_destino: body.url_destino,
         utm_source: r.utm_source, utm_medium: r.utm_medium, utm_campaign: r.utm_campaign,
         utm_content: r.utm_content || null, utm_term: r.utm_term || null, utm_id: r.utm_id,
-        funnel: r.funnel, plataforma: r.plataforma, url_final: r.url_final, hash_dedupe: r.hash_dedupe,
+        funnel: r.funnel, plataforma: r.plataforma, url_final: urlFinalExtras(r, body), hash_dedupe: r.hash_dedupe,
+        tipo: "web",
+        utm_source_platform: body.utm_source_platform || null,
+        utm_creative_format: body.utm_creative_format || null,
       });
     }
 
@@ -824,10 +839,52 @@ async function generateUtm(req: Request): Promise<Response> {
       utm_source: r.utm_source, utm_medium: r.utm_medium, utm_campaign: r.utm_campaign,
       utm_content: r.utm_content, utm_term: r.utm_term, utm_id: r.utm_id,
       funnel: r.funnel, plataforma: r.plataforma, gera_via: r.gera_via,
-      tracking_value: r.tracking_value, url_final: r.url_final,
+      utm_source_platform: body.utm_source_platform ?? null,
+      utm_creative_format: body.utm_creative_format ?? null,
+      tracking_value: r.tracking_value, url_final: urlFinalExtras(r, body),
     });
   } catch (error) {
     await logError("generate-utm", (error as Error).message);
+    return json({ error: (error as Error).message }, 500);
+  }
+}
+
+// POST /generate-utm-app — gera os 3 links de app (Play/Apple/Smart) e grava
+// no fop-db com tipo='app'. Dedupe por hash_dedupe = campaign|source|medium|smarthost.
+async function generateUtmApp(req: Request): Promise<Response> {
+  try {
+    const b = await req.json();
+    if (!b.campaign) return json({ error: "campanha obrigatória" }, 400);
+
+    const play = buildPlayLink({ pkg: b.pkg, source: b.source, medium: b.medium, campaign: b.campaign, term: b.term, content: b.content });
+    const apple = buildAppleLink({ appid: b.appid, pt: b.pt, campaign: b.campaign });
+    const smart = buildSmartLink({ smarthost: b.smarthost, source: b.source, medium: b.medium, campaign: b.campaign });
+
+    const hash = `app|${slug(b.campaign)}|${slug(b.source || "")}|${slug(b.medium || "")}|${b.smarthost || ""}`;
+    const existe = await one<{ n: number }>(
+      "SELECT 1 AS n FROM public.utm_links WHERE hash_dedupe = $1 LIMIT 1",
+      [hash],
+    );
+    if (!existe) {
+      await insert("public.utm_links", {
+        criado_por: b.criado_por ?? null,
+        url_destino: b.smarthost || play || apple || null,
+        utm_source: b.source ? slug(b.source) : null,
+        utm_medium: b.medium ? slug(b.medium) : null,
+        utm_campaign: b.campaign ? slug(b.campaign) : null,
+        utm_content: b.content ? slug(b.content) : null,
+        utm_term: b.term ? slug(b.term) : null,
+        funnel: "aquisicao",
+        plataforma: "app",
+        url_final: smart || play || apple || null,
+        hash_dedupe: hash,
+        tipo: "app",
+        store_meta: JSON.stringify({ play, apple, smart, pkg: b.pkg || null, appid: b.appid || null, pt: b.pt || null }),
+      });
+    }
+    return json({ status: existe ? "exists" : "created", play, apple, smart });
+  } catch (error) {
+    await logError("generate-utm-app", (error as Error).message);
     return json({ error: (error as Error).message }, 500);
   }
 }
@@ -848,6 +905,7 @@ Deno.serve(async (req: Request) => {
   if (path === "/track-event") return await trackEvent(req);
   if (path === "/utm-config") return await utmConfig();
   if (path === "/generate-utm") return await generateUtm(req);
+  if (path === "/generate-utm-app") return await generateUtmApp(req);
   if (path === "/rd-sync") return await rdSync(req);
   if (path === "/backfill-integradores") return await backfillHandler(req);
   if (path === "/enrich-cnpj") return await enrichCnpjHandler(req);
