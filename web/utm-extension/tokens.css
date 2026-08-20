@@ -1,0 +1,13 @@
+/* tokens.css — paleta e tipografia do design-system fotus-utm-builder (MASTER.md, Lucas).
+   Fontes remotas são bloqueadas pela CSP da extensão → usar fallback do sistema. */
+:root{
+  --bg:#0F172A; --card:#1B2336; --primary:#1E293B; --secondary:#334155;
+  --accent:#22C55E; --on-accent:#0F172A; --fg:#F8FAFC; --muted:#272F42;
+  --muted-fg:#94A3B8; --line:#475569; --danger:#EF4444;
+  --play:#3ddc84; --apple:#e5e7eb;
+  --mono:"Fira Code",ui-monospace,SFMono-Regular,Menlo,monospace;
+  --sans:"Fira Sans",system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+  --radius:12px;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--sans);width:400px;min-height:480px}

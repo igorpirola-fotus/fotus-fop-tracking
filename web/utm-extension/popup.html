@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="pt-BR"><head><meta charset="UTF-8">
+<link rel="stylesheet" href="tokens.css"><link rel="stylesheet" href="popup.css"></head>
+<body>
+  <header class="hd">
+    <div class="brand">FOTUS · UTM Builder</div>
+    <input id="autor" class="autor" placeholder="seu nome (fica salvo)">
+  </header>
+  <nav class="tabs">
+    <button class="tab active" data-tab="web">Link Web</button>
+    <button class="tab" data-tab="app">Link de App</button>
+  </nav>
+
+  <section id="pane-web" class="pane">
+    <label>Canal</label><select id="w-canal"></select>
+    <label>Objetivo</label><select id="w-objetivo"></select>
+    <label>Produto</label><select id="w-produto"></select>
+    <label>Público</label><select id="w-publico"></select>
+    <label>Geo</label><select id="w-geo"></select>
+    <label>Período</label><input id="w-periodo" placeholder="ex.: ago26">
+    <label>Conteúdo (opcional)</label><input id="w-content" placeholder="ex.: video-depoimento">
+    <label>Plataforma (opcional)</label><input id="w-splatform" placeholder="ex.: instagram">
+    <label>Formato criativo (opcional)</label><input id="w-cformat" placeholder="ex.: video">
+    <label>URL de destino</label><input id="w-url" placeholder="URL da aba atual">
+    <button id="w-gen" class="btn">Gerar &amp; salvar</button>
+    <div id="w-out" class="out"></div>
+  </section>
+
+  <section id="pane-app" class="pane hidden">
+    <label>Origem (utm_source)</label><input id="a-source" placeholder="ex.: instagram">
+    <label>Mídia (utm_medium)</label><input id="a-medium" placeholder="ex.: social">
+    <label>Campanha (utm_campaign)</label><input id="a-campaign" placeholder="ex.: feirao_solar">
+    <label>Conteúdo (opcional)</label><input id="a-content" placeholder="opcional">
+    <details class="stores"><summary>Dados das lojas (já preenchidos)</summary>
+      <label>Package (Android)</label><input id="a-pkg" value="com.fotus.mobile">
+      <label>App ID (iOS)</label><input id="a-appid" value="6780997966">
+      <label>Provider Token (pt)</label><input id="a-pt" value="58265800">
+      <label>Smart Link host</label><input id="a-smarthost" placeholder="https://fotus.com.br/app">
+    </details>
+    <button id="a-gen" class="btn">Gerar &amp; salvar</button>
+    <div id="a-out" class="out"></div>
+    <div id="a-qr" class="qr hidden"><img id="a-qrimg" alt="QR Code"></div>
+  </section>
+
+  <script src="popup.js"></script>
+</body></html>

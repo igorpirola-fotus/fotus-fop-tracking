@@ -1,0 +1,12 @@
+{
+  "manifest_version": 3,
+  "name": "Fotus UTM Builder",
+  "version": "1.0.0",
+  "description": "Gera UTMs padronizadas da Fotus (web e app) e salva no banco para conciliação.",
+  "action": { "default_popup": "popup.html", "default_title": "Fotus UTM Builder" },
+  "permissions": ["activeTab", "storage"],
+  "host_permissions": [
+    "https://fotus-fop-functions.mk863j.easypanel.host/*",
+    "https://api.qrserver.com/*"
+  ]
+}

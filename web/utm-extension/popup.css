@@ -1,0 +1,19 @@
+.hd{display:flex;flex-direction:column;gap:6px;padding:12px 14px;background:var(--primary)}
+.brand{font-family:var(--mono);font-weight:700;font-size:13px;color:var(--accent);letter-spacing:.04em}
+.autor{background:var(--muted);border:1px solid var(--line);color:var(--fg);border-radius:8px;padding:6px 8px;font-size:12px}
+.tabs{display:flex;gap:4px;padding:8px 14px 0}
+.tab{flex:1;background:var(--muted);color:var(--muted-fg);border:1px solid var(--line);border-bottom:none;border-radius:8px 8px 0 0;padding:8px;cursor:pointer;font-family:var(--mono);font-size:12px}
+.tab.active{background:var(--card);color:var(--fg)}
+.pane{display:flex;flex-direction:column;gap:4px;padding:12px 14px;background:var(--card)}
+.pane.hidden{display:none}
+label{font-size:11px;color:var(--muted-fg);margin-top:6px}
+select,input{background:var(--muted);border:1px solid var(--line);color:var(--fg);border-radius:8px;padding:8px;font-size:13px;font-family:var(--sans)}
+select:focus,input:focus{outline:none;border-color:var(--accent)}
+.btn{margin-top:12px;background:var(--accent);color:var(--on-accent);border:none;border-radius:8px;padding:10px;font-weight:700;cursor:pointer;transition:opacity .2s}
+.btn:hover{opacity:.9}
+.stores summary{cursor:pointer;color:var(--muted-fg);font-size:12px;margin-top:8px}
+.out{margin-top:10px;font-family:var(--mono);font-size:11px;word-break:break-all;color:var(--fg)}
+.out .lk{display:block;background:var(--muted);border:1px solid var(--line);border-radius:8px;padding:8px;margin-top:6px}
+.out .ok{color:var(--accent);font-size:11px;margin-top:6px}
+.out .err{color:var(--danger)}
+.qr{margin-top:10px;text-align:center}.qr.hidden{display:none}.qr img{width:200px;height:200px;background:#fff;border-radius:8px;padding:6px}
