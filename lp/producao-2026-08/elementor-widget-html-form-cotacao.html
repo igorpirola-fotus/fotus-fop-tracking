@@ -1,0 +1,468 @@
+<!--
+  FOTUS — widget HTML do formulário da LP de cotação
+  ============================================================================
+  MUDOU DUAS COISAS EM RELAÇÃO AO QUE ESTÁ NO AR:
+
+  1. O bloco "1) UTMs" FOI REMOVIDO. Ele nunca funcionou (procurava um campo
+     chamado "utm_source", e o campo real do Elementor chama-se
+     "form_fields[utm_source]"), e agora quem faz esse trabalho é a tag única
+     do GTM. Menos um lugar com código.
+
+  2. ensureHidden foi corrigido. Ele procurava input[name="cnpj_formatado"],
+     não achava — porque o campo real é form_fields[cnpj_formatado] — e criava
+     um campo novo com o nome errado. O Elementor só envia o que está em
+     form_fields[...], então o CNPJ formatado e o telefone formatado NUNCA
+     chegavam ao RD Station. Agora chegam.
+
+  O resto (CSS, máscara, validação de CNPJ, consulta à BrasilAPI) está
+  igual ao que você já tinha — não mexi.
+-->
+<style>
+  .elementor-field-group-field_18cf28a,
+  .elementor-field-group-field_eaad1ad{
+    overflow: visible !important;
+    position: relative !important;
+    margin-bottom: 18px !important;
+  }
+
+  .lp-border-invalid{
+    border: 1px solid #ff4d4f !important;
+    box-shadow: 0 0 0 3px rgba(255,77,79,.12) !important;
+    outline: none !important;
+  }
+  .lp-border-valid{
+    border: 1px solid #3ac74b !important;
+    box-shadow: 0 0 0 3px rgba(58,199,75,.12) !important;
+    outline: none !important;
+  }
+
+  /* ícone nos campos de texto */
+  .lp-status-icon{
+    padding-right: 42px !important;
+    background-repeat: no-repeat !important;
+    background-position: right 14px center !important;
+    background-size: 18px 18px !important;
+  }
+  .lp-bg-valid{
+    background-image: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="%233ac74b" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>') !important;
+  }
+  .lp-bg-invalid{
+    background-image: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="%23ff4d4f" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="M6 6 18 18"/></svg>') !important;
+  }
+
+  /* loading no campo CNPJ enquanto busca BrasilAPI */
+  .lp-loading{
+    padding-right: 42px !important;
+    background-repeat: no-repeat !important;
+    background-position: right 14px center !important;
+    background-size: 18px 18px !important;
+    background-image: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="%23aaaaaa" stroke-width="2.5" stroke-linecap="round"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg>') !important;
+    animation: lp-spin .8s linear infinite !important;
+    border: 1px solid #aaaaaa !important;
+    box-shadow: 0 0 0 3px rgba(170,170,170,.1) !important;
+  }
+  @keyframes lp-spin{
+    from{ background-image: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="%23aaaaaa" stroke-width="2.5" stroke-linecap="round"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg>') !important; }
+  }
+
+  .elementor-form button[disabled],
+  .elementor-form button[disabled]:hover{
+    opacity: .55 !important;
+    cursor: not-allowed !important;
+    filter: grayscale(.15);
+  }
+
+  /* esconde mensagens de erro nativas do Elementor nesses campos */
+  .elementor-field-group-field_18cf28a .elementor-message,
+  .elementor-field-group-field_18cf28a .elementor-field-error,
+  .elementor-field-group-field_18cf28a .elementor-error,
+  .elementor-field-group-field_eaad1ad .elementor-message,
+  .elementor-field-group-field_eaad1ad .elementor-field-error,
+  .elementor-field-group-field_eaad1ad .elementor-error{
+    display:none !important;
+    height:0 !important;
+    margin:0 !important;
+    padding:0 !important;
+  }
+
+  .lp-ph-invalid::placeholder{
+    color:#ff4d4f !important;
+    opacity:1 !important;
+  }
+
+  /* BOTÃO SOLICITAR COTAÇÃO (estados) */
+  .elementor-form button[type="submit"]{
+    background-color: #0D518E !important;
+    color: #FFFFFF !important;
+    border: none !important;
+    font-weight: 700 !important;
+    letter-spacing: .3px !important;
+    border-radius: 10px !important;
+    box-shadow: 0 6px 18px rgba(13,81,142,.35) !important;
+    transition: background-color .2s ease, transform .05s ease, opacity .2s ease !important;
+  }
+  .elementor-form button[type="submit"]:hover{
+    background-color: #0A3F6E !important;
+    transform: translateY(-1px) !important;
+  }
+  .elementor-form button[type="submit"]:active{
+    transform: translateY(0) !important;
+  }
+  .elementor-form button[type="submit"][disabled],
+  .elementor-form button[type="submit"][disabled]:hover{
+    background-color: #0D518E !important;
+    color: #FFFFFF !important;
+    opacity: .45 !important;
+    filter: none !important;
+    transform: none !important;
+    box-shadow: none !important;
+    cursor: not-allowed !important;
+  }
+
+  /* respiro entre o título e o subtítulo do card do formulário */
+  .elementor-widget-heading + .elementor-widget-text-editor{ margin-top: 6px !important; }
+</style>
+
+<script>
+/* ============================================================================
+   Validações + máscaras + enriquecimento de CNPJ
+   (a captura de UTM saiu daqui — agora é a tag única do GTM que cuida disso)
+   ========================================================================== */
+(function () {
+  function onlyDigits(v){ return (v || '').replace(/\D/g,''); }
+
+  /* --------------------------------------------------------------------------
+     CORRIGIDO: agora procura o campo REAL do Elementor, form_fields[nome].
+     Antes procurava input[name="cnpj_formatado"], não achava, e criava um
+     campo órfão que o Elementor nunca enviava.
+     ------------------------------------------------------------------------ */
+  function ensureHidden(form, name){
+    var el = form.querySelector('input[name="form_fields[' + name + ']"]')
+          || document.getElementById('form-field-' + name)
+          || form.querySelector('input[name="' + name + '"]');
+    if (el) return el;
+    el = document.createElement('input');
+    el.type = 'hidden';
+    el.name = 'form_fields[' + name + ']';   // nome que o Elementor realmente envia
+    form.appendChild(el);
+    return el;
+  }
+
+  function findEnv(){
+    const cnpjGroup = document.querySelector('.elementor-field-group-field_18cf28a');
+    const telGroup  = document.querySelector('.elementor-field-group-field_eaad1ad');
+
+    const cnpj =
+      (cnpjGroup ? cnpjGroup.querySelector('input, textarea') : null) ||
+      document.querySelector('#form-field-field_18cf28a') ||
+      document.querySelector('input[name*="cnpj" i], input[placeholder*="cnpj" i]');
+
+    if (!cnpj) return null;
+    const form = cnpj.closest('form');
+    if (!form) return null;
+
+    const tel =
+      (telGroup ? telGroup.querySelector('input, textarea') : null) ||
+      document.querySelector('#form-field-field_eaad1ad') ||
+      form.querySelector('input[name*="telefone" i], input[name*="whats" i], input[name*="phone" i], input[placeholder*="whats" i], input[placeholder*="telefone" i]');
+
+    // nome da empresa — placeholder começa com "Nome" (evita pegar "Digite o CNPJ da empresa")
+    const nome = form.querySelector('input[placeholder^="Nome" i]') ||
+      [...form.querySelectorAll('input[type="text"], input:not([type])')].find(
+        el => el !== cnpj && /^nome|razao|company/i.test(el.placeholder)
+      );
+
+    const estado = form.querySelector('select');
+    const btn = form.querySelector('button[type="submit"], input[type="submit"]');
+
+    return {
+      cnpj, tel, nome, estado, form, btn,
+      cnpjHidden : ensureHidden(form, 'cnpj_formatado'),
+      telHidden  : ensureHidden(form, 'telefone_formatado'),
+    };
+  }
+
+  /* ---------- CNPJ ---------- */
+  function maskCNPJ(raw){
+    const d = onlyDigits(raw).slice(0,14);
+    let out = d.slice(0,2);
+    if (d.length > 2)  out += '.' + d.slice(2,5);
+    if (d.length > 5)  out += '.' + d.slice(5,8);
+    if (d.length > 8)  out += '/' + d.slice(8,12);
+    if (d.length > 12) out += '-' + d.slice(12,14);
+    return out;
+  }
+
+  function validarCNPJ(cnpj){
+    cnpj = onlyDigits(cnpj);
+    if (cnpj.length !== 14 || /^(\d)\1+$/.test(cnpj)) return false;
+    let s = 0, p = 5;
+    for (let i = 0; i < 12; i++){ s += Number(cnpj[i]) * p; p = p === 2 ? 9 : p - 1; }
+    let r = (s % 11) < 2 ? 0 : 11 - (s % 11);
+    if (String(r) !== cnpj[12]) return false;
+    s = 0; p = 6;
+    for (let i = 0; i < 13; i++){ s += Number(cnpj[i]) * p; p = p === 2 ? 9 : p - 1; }
+    r = (s % 11) < 2 ? 0 : 11 - (s % 11);
+    return String(r) === cnpj[13];
+  }
+
+  /* ---------- BrasilAPI — enriquecimento automático ---------- */
+  let _cnpjAbort = null;
+
+  async function enrichCNPJ(cnpjDigits, env){
+    if (_cnpjAbort) _cnpjAbort.abort();
+    _cnpjAbort = new AbortController();
+
+    env.cnpj.classList.remove('lp-border-valid','lp-border-invalid','lp-status-icon','lp-bg-valid','lp-bg-invalid');
+    env.cnpj.classList.add('lp-loading');
+
+    try {
+      const res = await fetch(
+        `https://brasilapi.com.br/api/cnpj/v1/${cnpjDigits}`,
+        { signal: _cnpjAbort.signal }
+      );
+
+      env.cnpj.classList.remove('lp-loading');
+
+      if (!res.ok) {
+        invalid(env.cnpj);
+        env.cnpj.setAttribute('placeholder','CNPJ não encontrado');
+        updateButton(env);
+        return;
+      }
+
+      const data = await res.json();
+
+      // situacao_cadastral: 1=Nula, 2=ATIVA, 3=Suspensa, 4=Inapta, 8=Baixada
+      const situacaoNum = Number(data.situacao_cadastral);
+      const situacaoStr = String(data.situacao_cadastral || '').toUpperCase();
+      const descricao   = String(data.descricao_situacao_cadastral || '').toUpperCase();
+      const ativa = situacaoNum === 2 || situacaoStr === 'ATIVA' || descricao === 'ATIVA';
+
+      if (!ativa) {
+        const labelSituacao = data.descricao_situacao_cadastral || situacaoStr || 'inativa';
+        console.warn('[Fotus] CNPJ inativo:', labelSituacao);
+        invalid(env.cnpj);
+        env.cnpj.setAttribute('placeholder', `CNPJ ${String(labelSituacao).toLowerCase()} — use um CNPJ ativo`);
+        updateButton(env);
+        return;
+      }
+
+      valid(env.cnpj);
+
+      if (env.nome && !env.nome.value && data.razao_social) {
+        env.nome.value = data.razao_social
+          .toLowerCase()
+          .replace(/\b\w/g, c => c.toUpperCase());
+      }
+
+      if (env.estado && data.uf) {
+        env.estado.value = data.uf;
+        env.estado.classList.add('lp-border-valid');
+        env.estado.classList.remove('lp-border-invalid');
+        env.estado.dispatchEvent(new Event('change'));
+      }
+
+    } catch (err) {
+      if (err.name === 'AbortError') return;
+      console.error('[Fotus LP] Erro BrasilAPI:', err.message);
+      env.cnpj.classList.remove('lp-loading');
+      valid(env.cnpj); // falha silenciosa — não bloqueia o form
+    }
+
+    syncHidden(env);
+    updateButton(env);
+  }
+
+  /* ---------- Telefone ---------- */
+  function normalizePhone(raw){
+    let digits = onlyDigits(raw);
+    const has55 = digits.startsWith('55');
+    if (has55) digits = digits.slice(2);
+    return { has55, digits: digits.slice(0,11) };
+  }
+
+  function formatPhoneBR(raw){
+    const { has55, digits } = normalizePhone(raw);
+    if (!digits) return has55 ? '+55 ' : '';
+    let out = digits.replace(/^(\d{2})(\d)/,'($1) $2');
+    out = digits.length <= 10
+      ? out.replace(/(\d{4})(\d)/,'$1-$2')
+      : out.replace(/(\d{5})(\d)/,'$1-$2');
+    return has55 ? `+55 ${out}` : out;
+  }
+
+  function isValidPhoneBR(raw){
+    const { digits } = normalizePhone(raw);
+    return digits.length === 10 || digits.length === 11;
+  }
+
+  /* ---------- UI helpers ---------- */
+  function neutral(el, ph0){
+    el.classList.remove('lp-border-valid','lp-border-invalid','lp-status-icon','lp-bg-valid','lp-bg-invalid','lp-ph-invalid','lp-loading');
+    if (ph0 != null) el.setAttribute('placeholder', ph0);
+  }
+
+  function invalid(el){
+    el.classList.add('lp-border-invalid');
+    el.classList.remove('lp-border-valid','lp-loading');
+    if (el.tagName !== 'SELECT'){
+      el.classList.add('lp-status-icon','lp-bg-invalid','lp-ph-invalid');
+      el.classList.remove('lp-bg-valid');
+    }
+  }
+
+  function valid(el){
+    el.classList.add('lp-border-valid');
+    el.classList.remove('lp-border-invalid','lp-loading');
+    if (el.tagName !== 'SELECT'){
+      el.classList.add('lp-status-icon','lp-bg-valid');
+      el.classList.remove('lp-bg-invalid','lp-ph-invalid');
+    }
+  }
+
+  function syncHidden(env){
+    if (env.cnpjHidden) env.cnpjHidden.value = env.cnpj.value;
+    if (env.telHidden)  env.telHidden.value   = env.tel ? env.tel.value : '';
+  }
+
+  function updateButton(env){
+    const cnpjOk   = onlyDigits(env.cnpj.value).length === 14 && validarCNPJ(env.cnpj.value)
+                     && !env.cnpj.classList.contains('lp-border-invalid')
+                     && !env.cnpj.classList.contains('lp-loading');
+    const telOk    = env.tel    ? isValidPhoneBR(env.tel.value) : true;
+    const estadoOk = env.estado ? env.estado.value !== ''       : true;
+    if (env.btn && 'disabled' in env.btn) env.btn.disabled = !(cnpjOk && telOk && estadoOk);
+    return { cnpjOk, telOk, estadoOk };
+  }
+
+  /* ---------- Init ---------- */
+  function initForForm(env){
+    if (env.form.dataset.lpMaskInit === '1') return;
+    env.form.dataset.lpMaskInit = '1';
+
+    const cnpjPH0 = env.cnpj.getAttribute('placeholder') || '';
+    const telPH0  = env.tel ? (env.tel.getAttribute('placeholder') || '') : '';
+
+    if (env.btn && 'disabled' in env.btn) env.btn.disabled = true;
+
+    if (onlyDigits(env.cnpj.value).length === 14 && validarCNPJ(env.cnpj.value)){
+      env.cnpj.value = maskCNPJ(env.cnpj.value);
+      enrichCNPJ(onlyDigits(env.cnpj.value), env);
+    } else {
+      neutral(env.cnpj, cnpjPH0);
+    }
+
+    if (env.tel){
+      env.tel.setAttribute('inputmode','tel');
+      env.tel.setAttribute('autocomplete','tel');
+      if (onlyDigits(env.tel.value).length) env.tel.value = formatPhoneBR(env.tel.value);
+      else neutral(env.tel, telPH0);
+    }
+
+    syncHidden(env);
+    updateButton(env);
+
+    /* — CNPJ — */
+    env.cnpj.addEventListener('focus', () => {
+      if (!onlyDigits(env.cnpj.value)){
+        invalid(env.cnpj);
+        env.cnpj.setAttribute('placeholder','Digite um CNPJ válido');
+      }
+    });
+
+    env.cnpj.addEventListener('input', () => {
+      env.cnpj.value = maskCNPJ(env.cnpj.value);
+      syncHidden(env);
+
+      const d = onlyDigits(env.cnpj.value);
+      if (!d){ invalid(env.cnpj); env.cnpj.setAttribute('placeholder','Digite um CNPJ válido'); updateButton(env); return; }
+      if (d.length < 14){ invalid(env.cnpj); env.cnpj.setAttribute('placeholder','Digite um CNPJ válido'); updateButton(env); return; }
+      if (!validarCNPJ(d)){ invalid(env.cnpj); env.cnpj.setAttribute('placeholder','CNPJ inválido'); updateButton(env); return; }
+
+      env.cnpj.setAttribute('placeholder', cnpjPH0);
+      enrichCNPJ(d, env);
+    });
+
+    /* — WhatsApp — */
+    if (env.tel){
+      env.tel.addEventListener('focus', () => {
+        if (!onlyDigits(env.tel.value)){
+          env.tel.value = '+55 ';
+          invalid(env.tel);
+          env.tel.setAttribute('placeholder','Digite um WhatsApp válido');
+          syncHidden(env);
+          updateButton(env);
+        }
+      });
+
+      env.tel.addEventListener('input', () => {
+        const rawDigits = onlyDigits(env.tel.value);
+        if (!rawDigits){
+          env.tel.value = '';
+          invalid(env.tel);
+          env.tel.setAttribute('placeholder','Digite um WhatsApp válido');
+          syncHidden(env);
+          updateButton(env);
+          return;
+        }
+        env.tel.value = formatPhoneBR(env.tel.value);
+        syncHidden(env);
+        isValidPhoneBR(env.tel.value)
+          ? (valid(env.tel), env.tel.setAttribute('placeholder', telPH0))
+          : (invalid(env.tel), env.tel.setAttribute('placeholder','Digite um WhatsApp válido'));
+        updateButton(env);
+      });
+    }
+
+    /* — Estado — */
+    if (env.estado){
+      env.estado.addEventListener('change', () => {
+        env.estado.value
+          ? (env.estado.classList.add('lp-border-valid'), env.estado.classList.remove('lp-border-invalid'))
+          : (env.estado.classList.add('lp-border-invalid'), env.estado.classList.remove('lp-border-valid'));
+        updateButton(env);
+      });
+    }
+
+    /* — Submit: última barreira — */
+    env.form.addEventListener('submit', (e) => {
+      syncHidden(env);
+      const cnpjOk   = onlyDigits(env.cnpj.value).length === 14 && validarCNPJ(env.cnpj.value)
+                       && !env.cnpj.classList.contains('lp-border-invalid');
+      const telOk    = env.tel    ? isValidPhoneBR(env.tel.value) : true;
+      const estadoOk = env.estado ? env.estado.value !== ''       : true;
+
+      if (!cnpjOk){
+        e.preventDefault(); e.stopPropagation();
+        invalid(env.cnpj); env.cnpj.setAttribute('placeholder','Digite um CNPJ válido'); env.cnpj.focus();
+        updateButton(env); return false;
+      }
+      if (env.tel && !telOk){
+        e.preventDefault(); e.stopPropagation();
+        invalid(env.tel); env.tel.setAttribute('placeholder','Digite um WhatsApp válido'); env.tel.focus();
+        updateButton(env); return false;
+      }
+      if (env.estado && !estadoOk){
+        e.preventDefault(); e.stopPropagation();
+        env.estado.classList.add('lp-border-invalid'); env.estado.focus();
+        updateButton(env); return false;
+      }
+      return true;
+    }, true);
+  }
+
+  function tryInit(){
+    const env = findEnv();
+    if (!env) return false;
+    initForForm(env);
+    return true;
+  }
+
+  if (tryInit()) return;
+  const obs = new MutationObserver(() => { if (tryInit()) obs.disconnect(); });
+  obs.observe(document.documentElement, { childList: true, subtree: true });
+  window.addEventListener('load', tryInit);
+  document.addEventListener('DOMContentLoaded', tryInit);
+})();
+</script>

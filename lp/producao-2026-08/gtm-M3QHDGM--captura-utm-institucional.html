@@ -1,0 +1,80 @@
+<!--
+  FOTUS — CAPTURA DE UTM NO SITE INSTITUCIONAL
+  ============================================================================
+  ONDE VAI: container GTM-M3QHDGM (o do fotus.com.br), NÃO o da LP.
+  Acionador: All Pages (Exibição de página).
+
+  POR QUE ELA EXISTE
+  O visitante clica no anúncio e cai em fotus.com.br. Só depois ele navega
+  até energia.fotus.com.br para preencher o formulário. Se a UTM não for
+  guardada aqui, no primeiro contato, ela não existe mais quando ele chega
+  na LP — e é exatamente isso que vinha acontecendo.
+
+  Esta tag só faz UMA coisa: guarda a UTM e os IDs de clique num cookie de
+  .fotus.com.br, que atravessa para a LP. Ela não preenche formulário,
+  não manda evento, não fala com Meta nem GA4.
+-->
+<script>
+(function () {
+  'use strict';
+
+  var DOMINIO_COOKIE = '.fotus.com.br';   // o ponto na frente é o que faz atravessar para energia.fotus.com.br
+  var DIAS_COOKIE    = 90;
+
+  var CHAVES = ['utm_source','utm_medium','utm_campaign','utm_term','utm_content',
+                'gclid','gbraid','wbraid','fbclid'];
+
+  function lerCookie(nome) {
+    var m = document.cookie.match(new RegExp('(^| )' + nome + '=([^;]+)'));
+    return m ? decodeURIComponent(m[2]) : '';
+  }
+  function gravarCookie(nome, valor, dias) {
+    if (!valor) return;
+    var exp = new Date(Date.now() + (dias || DIAS_COOKIE) * 864e5).toUTCString();
+    document.cookie = nome + '=' + encodeURIComponent(valor) +
+      ';expires=' + exp + ';path=/;domain=' + DOMINIO_COOKIE + ';SameSite=Lax';
+  }
+  function daUrl(nome) {
+    var qs = new URLSearchParams(location.search);
+    var hs = new URLSearchParams((location.hash || '').replace(/^#/, ''));
+    return (qs.get(nome) || hs.get(nome) || '').trim();
+  }
+
+  /* Padronização — mesma tabela da tag da LP, para os dois lados gravarem igual.
+     Se um dia mudar lá, mude aqui também. */
+  var MAPA_ORIGEM = {
+    facebook: 'meta', fb: 'meta', 'facebook.com': 'meta',
+    ig: 'meta', instagram: 'meta', 'instagram.com': 'meta', meta: 'meta',
+    google: 'google', 'google.com': 'google', adwords: 'google', googleads: 'google'
+  };
+  var MAPA_CANAL = {
+    'paid_social': 'paid-social', 'paidsocial': 'paid-social', 'paid-social': 'paid-social',
+    'paid': 'paid-social', 'face-ads': 'paid-social',
+    'cpc': 'paid-search', 'paid-search': 'paid-search', 'paid_search': 'paid-search',
+    'performance-max': 'paid-search', 'performance_max': 'paid-search', 'pmax': 'paid-search'
+  };
+  function padronizar(chave, valor) {
+    if (!valor) return valor;
+    var v = String(valor).trim().toLowerCase();
+    if (chave === 'utm_source') return MAPA_ORIGEM[v] || v;
+    if (chave === 'utm_medium') return MAPA_CANAL[v]  || v;
+    return String(valor).trim();
+  }
+
+  /* Guarda o que veio na URL. O clique de agora sempre vence o cookie antigo. */
+  CHAVES.forEach(function (chave) {
+    var valor = padronizar(chave, daUrl(chave));
+    if (valor) gravarCookie(chave, valor);
+  });
+
+  /* Primeira página vista e de onde veio — úteis no CRM depois. */
+  if (!lerCookie('landing_page')) gravarCookie('landing_page', location.pathname || '/');
+  if (!lerCookie('referrer') && document.referrer) gravarCookie('referrer', document.referrer);
+
+  /* _fbc do Meta: monta a partir do fbclid quando o Meta ainda não montou. */
+  var fbclid = daUrl('fbclid');
+  if (!lerCookie('_fbc') && fbclid) {
+    gravarCookie('_fbc', 'fb.1.' + Date.now() + '.' + fbclid);
+  }
+})();
+</script>

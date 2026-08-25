@@ -1,3 +1,20 @@
+/* ============================================================================
+   ⚠️  DESATUALIZADO — NÃO É O QUE ESTÁ NO AR (marcado em 25/ago/2026)
+   ----------------------------------------------------------------------------
+   Este arquivo NÃO reflete a produção e não deve ser usado como referência.
+   Diferenças conhecidas em relação ao que roda hoje:
+     · EDGE_URL aqui aponta para o Supabase (wttmlnhzvevtabjetsqz), que já foi
+       substituído pelo fop-functions no EasyPanel.
+     · Não tem `domain=.fotus.com.br` no cookie → cross-domain quebrado.
+     · O regex do campo `nome` casa com o placeholder do CNPJ.
+
+   FONTE-VERDADE do tracking:
+     · LP           → GTM-5KKTF798, tag "FOP | Tracking + UTM (única)"
+     · Institucional→ GTM-M3QHDGM, tag "FOTUS — CAPTURA DE UTM NO SITE INSTITUCIONAL"
+
+   Leia docs/14-captura-utm-e-tracking-2026-08.md antes de mexer em tracking.
+   ========================================================================== */
+
 /**
  * FOP Tracking Fotus — Script de captura client-side
  * Inserir antes de </body> na LP, logo após o snippet do Meta Pixel

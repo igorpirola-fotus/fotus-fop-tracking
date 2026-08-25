@@ -1,0 +1,297 @@
+<!--
+  FOTUS — TAG ÚNICA DE RASTREAMENTO
+  ============================================================================
+  Substitui TRÊS tags do GTM:
+    · HTML | Persistir IDs de clique/UTMs
+    · HTML |Preencher os campos ocultos do Elementor
+    · FOP | fotus-tracking-gtm
+
+  O que ela faz, nesta ordem:
+    1. Guarda UTM e IDs de clique num cookie de .fotus.com.br (atravessa o
+       salto do site para a LP — era isso que estava faltando).
+    2. Preenche os campos ocultos do formulário do Elementor.
+    3. Manda PageView para o FOP.
+    4. Manda Lead para o FOP quando o formulário é enviado com sucesso.
+
+  Acionador: All Pages (Exibição de página).
+  Ela NÃO envia nada para Meta nem GA4 — essas tags já existem separadas
+  no GTM e continuam funcionando normalmente.
+-->
+<script>
+(function () {
+  'use strict';
+
+  /* ========================================================================
+     CONFIGURAÇÃO — é aqui que se mexe, se um dia precisar
+     ===================================================================== */
+  var DOMINIO_COOKIE = '.fotus.com.br';   // o ponto na frente é o que faz o cookie atravessar de fotus.com.br para energia.fotus.com.br
+  var DIAS_COOKIE    = 90;
+  var EDGE_URL       = 'https://fotus-fop-functions.mk863j.easypanel.host/track-event';
+
+  var CHAVES = ['utm_source','utm_medium','utm_campaign','utm_term','utm_content',
+                'gclid','gbraid','wbraid','fbclid'];
+
+  /* ========================================================================
+     AJUDANTES DE COOKIE
+     ===================================================================== */
+  function lerCookie(nome) {
+    var m = document.cookie.match(new RegExp('(^| )' + nome + '=([^;]+)'));
+    return m ? decodeURIComponent(m[2]) : '';
+  }
+  function gravarCookie(nome, valor, dias) {
+    if (!valor) return;
+    var exp = new Date(Date.now() + (dias || DIAS_COOKIE) * 864e5).toUTCString();
+    document.cookie = nome + '=' + encodeURIComponent(valor) +
+      ';expires=' + exp + ';path=/;domain=' + DOMINIO_COOKIE + ';SameSite=Lax';
+  }
+  function daUrl(nome) {
+    var qs = new URLSearchParams(location.search);
+    var hs = new URLSearchParams((location.hash || '').replace(/^#/, ''));
+    return (qs.get(nome) || hs.get(nome) || '').trim();
+  }
+
+  /* ========================================================================
+     PADRONIZAÇÃO DE NOMES
+     Junta o que é a mesma coisa escrita de jeitos diferentes.
+     Se um dia quiser desligar, apague os dois objetos abaixo e o corpo da
+     função padronizar, deixando só "return valor.trim()".
+     ===================================================================== */
+  var MAPA_ORIGEM = {
+    facebook: 'meta', fb: 'meta', 'facebook.com': 'meta',
+    ig: 'meta', instagram: 'meta', 'instagram.com': 'meta', meta: 'meta',
+    google: 'google', 'google.com': 'google', adwords: 'google', googleads: 'google'
+  };
+  var MAPA_CANAL = {
+    'paid_social': 'paid-social', 'paidsocial': 'paid-social', 'paid-social': 'paid-social',
+    'paid': 'paid-social', 'face-ads': 'paid-social',
+    'cpc': 'paid-search', 'paid-search': 'paid-search', 'paid_search': 'paid-search',
+    'performance-max': 'paid-search', 'performance_max': 'paid-search', 'pmax': 'paid-search'
+  };
+  function padronizar(chave, valor) {
+    if (!valor) return valor;
+    var v = String(valor).trim().toLowerCase();
+    if (chave === 'utm_source') return MAPA_ORIGEM[v] || v;
+    if (chave === 'utm_medium') return MAPA_CANAL[v]  || v;
+    return String(valor).trim();
+  }
+
+  /* ========================================================================
+     1) RESOLVER E GUARDAR
+     Regra: o que veio na URL agora vence o cookie antigo.
+     ===================================================================== */
+  var VALORES = {};
+
+  (function resolver() {
+    CHAVES.forEach(function (chave) {
+      var daUrlAgora = padronizar(chave, daUrl(chave));
+      var doCookie   = lerCookie(chave);
+
+      // migra uma única vez o que ficou preso no localStorage das versões antigas
+      if (!doCookie) {
+        try {
+          var antigo = localStorage.getItem(chave);
+          if (antigo) { doCookie = padronizar(chave, antigo); gravarCookie(chave, doCookie); }
+        } catch (e) {}
+      }
+
+      if (daUrlAgora) gravarCookie(chave, daUrlAgora);
+      VALORES[chave] = daUrlAgora || doCookie || '';
+    });
+
+    // extras úteis para o CRM
+    gravarCookie('landing_page', location.pathname || '/');
+    if (document.referrer) gravarCookie('referrer', document.referrer);
+    VALORES.landing_page = lerCookie('landing_page');
+    VALORES.referrer     = lerCookie('referrer');
+
+    // _fbc do Meta: monta a partir do fbclid quando o Meta ainda não montou
+    if (!lerCookie('_fbc') && VALORES.fbclid) {
+      gravarCookie('_fbc', 'fb.1.' + Date.now() + '.' + VALORES.fbclid);
+    }
+  })();
+
+  /* ========================================================================
+     2) PREENCHER OS CAMPOS OCULTOS DO ELEMENTOR
+     Os campos são invisíveis para o usuário, então podem ser sobrescritos
+     sem risco — é isso que garante que o clique de agora ganhe do valor velho.
+     ===================================================================== */
+  function escreverCampo(chave, valor) {
+    if (!valor) return;
+    var alvos = [];
+
+    var porId = document.getElementById('form-field-' + chave);
+    if (porId) alvos.push(porId);
+
+    [].slice.call(document.querySelectorAll('[name="form_fields[' + chave + ']"]'))
+      .forEach(function (el) { alvos.push(el); });
+
+    [].slice.call(document.querySelectorAll('[name="' + chave + '"]'))
+      .forEach(function (el) { alvos.push(el); });
+
+    alvos.forEach(function (el) {
+      if (el.value === valor) return;
+      el.value = valor;
+      el.dispatchEvent(new Event('input',  { bubbles: true }));
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+  }
+
+  function preencherTudo() {
+    CHAVES.forEach(function (c) { escreverCampo(c, VALORES[c]); });
+    escreverCampo('landing_page', VALORES.landing_page);
+    escreverCampo('referrer',     VALORES.referrer);
+  }
+
+  preencherTudo();
+
+  // O Elementor às vezes desenha o formulário depois. Fica de olho por alguns segundos.
+  (function vigiar() {
+    try {
+      var mo = new MutationObserver(preencherTudo);
+      mo.observe(document.documentElement, { childList: true, subtree: true });
+      var n = 0, t = setInterval(function () { preencherTudo(); if (++n > 12) clearInterval(t); }, 500);
+      setTimeout(function () { try { mo.disconnect(); } catch (e) {} }, 15000);
+    } catch (e) {}
+  })();
+
+  document.addEventListener('DOMContentLoaded', preencherTudo);
+  window.addEventListener('load', function () { setTimeout(preencherTudo, 300); });
+
+  /* ========================================================================
+     3) ENVIO DE EVENTO PARA O FOP
+     ===================================================================== */
+  function uuid() {
+    try { return crypto.randomUUID(); }
+    catch (e) { return 'fid-' + Date.now() + '-' + Math.random().toString(16).slice(2); }
+  }
+
+  var SESSION_ID = (function () {
+    var k = 'fotus_sid';
+    var s = '';
+    try { s = localStorage.getItem(k) || ''; } catch (e) {}
+    if (!s) s = lerCookie(k);
+    if (!s || s.length < 10) {
+      s = uuid();
+      try { localStorage.setItem(k, s); } catch (e) {}
+      gravarCookie(k, s, 365);
+    }
+    return s;
+  })();
+
+  function ga4ClientId() {
+    var c = lerCookie('_ga');
+    if (c) { var p = c.split('.'); if (p.length >= 4) return p[2] + '.' + p[3]; }
+    return SESSION_ID;
+  }
+
+  function dispositivo() {
+    var u = navigator.userAgent;
+    if (/tablet|ipad|playbook|silk/i.test(u)) return 'tablet';
+    if (/mobile|iphone|ipod|android|blackberry|mini|palm/i.test(u)) return 'mobile';
+    return 'desktop';
+  }
+
+  function enviar(nomeEvento, dados) {
+    dados = dados || {};
+    var corpo = {
+      event_id: uuid(),
+      event_name: nomeEvento,
+      session_id: SESSION_ID,
+      page_url: location.href,
+      referrer: document.referrer,
+      device_type: dispositivo(),
+      fbp: lerCookie('_fbp'),
+      fbc: lerCookie('_fbc'),
+      gclid: VALORES.gclid || '',
+      ga4_client_id: ga4ClientId(),
+      utm_source:   VALORES.utm_source   || null,
+      utm_medium:   VALORES.utm_medium   || null,
+      utm_campaign: VALORES.utm_campaign || null,
+      utm_content:  VALORES.utm_content  || null,
+      utm_term:     VALORES.utm_term     || null
+    };
+    ['cnpj','email','phone','nome','estado','value'].forEach(function (k) {
+      if (dados[k] != null && dados[k] !== '') corpo[k] = dados[k];
+    });
+    try {
+      fetch(EDGE_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(corpo),
+        keepalive: true
+      })['catch'](function () {});
+    } catch (e) {}
+  }
+
+  enviar('PageView', { content_category: 'aquisicao' });
+
+  /* ========================================================================
+     4) LEAD — quando o formulário é enviado com sucesso
+     ===================================================================== */
+  function valorDe(form, regex, excluirCnpj) {
+    var els = [].slice.call(form.querySelectorAll('input, select, textarea'));
+    for (var i = 0; i < els.length; i++) {
+      var el = els[i];
+      var texto = (el.name || '') + ' ' + (el.placeholder || '') + ' ' + (el.type || '') + ' ' + (el.id || '');
+      if (excluirCnpj && /cnpj/i.test(texto)) continue;   // <- impede o nome receber o CNPJ
+      if (regex.test(texto)) return String(el.value || '').trim();
+    }
+    return '';
+  }
+
+  function lerFormulario(form) {
+    // nome da empresa: primeiro tenta o campo cujo placeholder começa com "Nome"
+    var nome = '';
+    var elNome = form.querySelector('input[placeholder^="Nome" i]');
+    if (elNome) nome = String(elNome.value || '').trim();
+    else nome = valorDe(form, /nome|razao|razão|company/i, true);
+
+    return {
+      cnpj:   valorDe(form, /cnpj/i, false),
+      email:  valorDe(form, /email|e-mail|message/i, false),
+      phone:  valorDe(form, /whats|telefone|phone|\btel\b|eaad/i, false),
+      nome:   nome,
+      estado: valorDe(form, /estado|\buf\b/i, false),
+      content_category: 'aquisicao'
+    };
+  }
+
+  var pendente = null;
+  var leadEnviado = false;
+
+  // Guarda os dados no instante do envio, antes do formulário limpar.
+  document.addEventListener('submit', function (e) {
+    var form = e.target;
+    if (!form || form.tagName !== 'FORM') return;
+    preencherTudo();                       // última garantia de que os ocultos estão preenchidos
+    var d = lerFormulario(form);
+    if (d.cnpj || d.email || d.phone) pendente = d;
+  }, true);
+
+  function despacharLead() {
+    if (leadEnviado || !pendente) return;
+    leadEnviado = true;
+    enviar('Lead', pendente);
+    pendente = null;
+  }
+
+  // Caminho principal: o Elementor avisa quando o envio deu certo.
+  function ligarElementor() {
+    if (!window.jQuery) return false;
+    window.jQuery(document).on('submit_success', despacharLead);
+    return true;
+  }
+
+  if (!ligarElementor()) {
+    window.addEventListener('load', function () {
+      if (!ligarElementor()) {
+        // Rede de segurança: sem jQuery, envia pouco depois do submit.
+        document.addEventListener('submit', function () {
+          setTimeout(despacharLead, 1500);
+        }, true);
+      }
+    });
+  }
+
+})();
+</script>
