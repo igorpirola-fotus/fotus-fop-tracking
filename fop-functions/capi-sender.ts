@@ -27,6 +27,7 @@ export function normalizePhone(phone: string): string {
 export async function buildUserData(params: {
   email?: string;
   phone?: string;
+  cnpj?: string;
   nome?: string;
   cidade?: string;
   estado?: string;
@@ -51,6 +52,15 @@ export async function buildUserData(params: {
   if (params.cidade) ud.ct = [await hashValue(params.cidade)];
   if (params.estado) ud.st = [await hashValue(params.estado.toLowerCase())];
   if (params.cep) ud.zp = [await hashValue(params.cep.replace(/\D/g, ""))];
+
+  // external_id = sha256 do CNPJ (só dígitos). É a chave de match B2B estável:
+  // o e-mail é corporativo e frequentemente não é o da conta pessoal na Meta.
+  // Tem de ser IDÊNTICO ao EXTERN_ID de publicos-meta.ts — se divergir, público
+  // e evento deixam de casar (há teste travando essa igualdade).
+  if (params.cnpj) {
+    const digitos = params.cnpj.replace(/\D/g, "");
+    if (digitos) ud.external_id = [await hashValue(digitos)];
+  }
 
   ud.country = ["br"];
   if (params.ip) ud.client_ip_address = params.ip;
