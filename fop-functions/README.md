@@ -8,6 +8,8 @@ Parte da migração Supabase → EasyPanel (ver `docs/superpowers/plans/DISCOVER
 - `POST /track-event` — mesmo contrato da Edge Function antiga (event_id, event_name, session_id, ...).
 - `POST /rd-sync` — recebe os webhooks do RD Station CRM (payload nativo `event_name` + `document`), autenticado via header `Authorization: Bearer <RD_WEBHOOK_RECEIVER_TOKEN>`; mapeia etapa do deal → evento Meta/GA4 (Contact/Schedule/AddToCart/Purchase/OportunidadePerdida) e dispara CAPI/GA4 (sempre, independente de `CAPI_ENABLED` — não há caminho client-side/GTM para eventos de CRM).
 - `POST /enrich-cnpj` — `{ cnpj, integrador_id }` (BrasilAPI + lead score).
+- `POST /sync-contatos-rd` — espelha contatos do RD CRM em `public.rd_contatos` e enriquece `integradores.email/phone` via `org_id → cnpj`; paginado (`{pagina, max_paginas}` → `proxima_pagina`, que também é devolvida em caso de HTTP 429 para o chamador retomar); autenticado com `RD_WEBHOOK_RECEIVER_TOKEN`. Loop no n8n: workflow `6h1YEDa7XtE9cFuN`.
+- `POST /sync-publicos-meta` — sincroniza `ultron.vw_publico_meta` com as Custom Audiences da Meta via `usersreplace` (lotes de 10.000); aceita `{publico, dry_run}`; público com menos de 1.000 linhas é pulado; toda rodada vira linha em `ultron.publicos_meta_sync`. Cron no n8n: workflow `UE5B3a5VCvgmJVPi`. Ver `docs/15-publicos-meta.md`.
 - `GET /health` — checa conexão com o banco (`{ ok: true }`).
 
 ## Arquivos
@@ -25,6 +27,8 @@ Parte da migração Supabase → EasyPanel (ver `docs/superpowers/plans/DISCOVER
 | `META_CAPI_TOKEN` | token da API de Conversões (sistema) |
 | `GA4_MEASUREMENT_ID` | `G-XXXXXXXXXX` (opcional — sem ele, GA4 é pulado) |
 | `GA4_API_SECRET` | secret do Measurement Protocol (opcional) |
+| `META_AD_ACCOUNT_ID` | ID da conta de anúncios, com ou sem o prefixo `act_` (Fotus Solar 2025: `1017764197039855`) — só para públicos |
+| `META_ADS_TOKEN` | token de sistema com escopo `ads_management` — **não** é o `META_CAPI_TOKEN`; sem ele `/sync-publicos-meta` falha. Exige também os Termos de Público Personalizado aceitos na conta |
 | `RD_WEBHOOK_RECEIVER_TOKEN` | Bearer exigido na entrada do webhook do RD CRM — obrigatório p/ o `rd-sync` |
 | `RD_CRM_TOKEN` | access_token da API RD CRM v2 — usado só para **semear** `public.oauth_tokens` na primeira execução (depois o banco é a fonte da verdade) |
 | `RD_CRM_REFRESH_TOKEN` | refresh_token do RD CRM — idem, só para o seed inicial |
