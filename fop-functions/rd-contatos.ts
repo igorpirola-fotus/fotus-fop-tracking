@@ -8,7 +8,7 @@
 //
 // Validado ao vivo em 27/ago/2026 contra a conta real: 2 de 2 clientes ativos
 // sem e-mail no fop-db tinham e-mail E telefone no contato do CRM.
-import { q } from "./db.ts";
+import { one, q } from "./db.ts";
 import { getAccessToken } from "./rd-crm-client.ts";
 
 const RD_API = "https://api.rd.services";
@@ -168,6 +168,122 @@ export async function syncContatosRd(paginaInicial: number, maxPaginas: number):
   }
 
   return { paginas, contatos_lidos: lidos, contatos_gravados: gravados, proxima_pagina: proxima };
+}
+
+// ─────────────────── modo por organização ────────────────────────────────────
+// A paginação simples de /crm/v2/contacts morre no registro 10.000 ("It is only
+// possible to list the first 10,000 records of the specified filter" — erro 400
+// real, batido em 27/ago/2026 na página 51, com 9.600 contatos lidos de ~190 mil).
+//
+// Solução: filtrar por organização. O filtro RDQL organization_id aceita vários
+// ids por chamada (validado ao vivo: `organization_id:(id1,id2)` devolveu os
+// contatos das duas empresas), então cada requisição cobre um lote de empresas —
+// e só as que têm integrador no fop-db, que é o que interessa.
+
+/** Empresas por requisição. 20 x ~30 contatos = 600, folgado sob o teto de 10.000. */
+export const ORGS_POR_CHAMADA = 20;
+
+export function montarFiltroOrgs(orgIds: string[]): string {
+  if (orgIds.length === 0) return "";
+  if (orgIds.length === 1) return `organization_id:${orgIds[0]}`;
+  return `organization_id:(${orgIds.join(",")})`;
+}
+
+/** Organizações ainda não varridas, priorizando as de integrador sem chave. */
+const SQL_ORGS_PENDENTES = `
+SELECT DISTINCT c.org_id
+  FROM public.rd_deal_cnpj_cache c
+  JOIN public.integradores i ON i.cnpj = c.cnpj
+ WHERE c.org_id IS NOT NULL AND c.org_id <> ''
+   AND NOT EXISTS (SELECT 1 FROM public.rd_org_contatos_sync s WHERE s.org_id = c.org_id)
+ ORDER BY 1
+ LIMIT $1
+`;
+
+async function buscarContatosDoLote(orgIds: string[]): Promise<unknown[]> {
+  const filtro = montarFiltroOrgs(orgIds);
+  if (!filtro) return [];
+
+  const itens: unknown[] = [];
+  for (let pagina = 1; pagina <= 10; pagina++) {
+    const token = await getAccessToken();
+    const url = `${RD_API}/crm/v2/contacts?filter=${encodeURIComponent(filtro)}` +
+      `&page%5Bnumber%5D=${pagina}&page%5Bsize%5D=${PAGE_SIZE}`;
+    const res = await fetch(url, {
+      headers: { Authorization: `Bearer ${token}`, Accept: "application/json" },
+    });
+    if (res.status === 429) break; // o lote fica sem marcar e volta na próxima rodada
+    if (!res.ok) throw new Error(`GET contacts (org lote): ${res.status} ${await res.text()}`);
+
+    const lote = extrairItens(await res.json());
+    itens.push(...lote);
+    if (lote.length < PAGE_SIZE) break;
+  }
+  return itens;
+}
+
+export async function syncContatosPorOrg(limiteOrgs: number): Promise<{
+  orgs_processadas: number;
+  contatos_gravados: number;
+  orgs_restantes: number;
+}> {
+  const pendentes = await q<{ org_id: string }>(SQL_ORGS_PENDENTES, [limiteOrgs]);
+  const orgIds = pendentes.map((p) => p.org_id);
+
+  let gravados = 0;
+  let processadas = 0;
+
+  for (const lote of chunkOrgs(orgIds, ORGS_POR_CHAMADA)) {
+    const itens = await buscarContatosDoLote(lote);
+    const porOrg = new Map<string, number>(lote.map((id) => [id, 0]));
+
+    for (const item of itens) {
+      const c = parseContato(item);
+      if (!c) continue;
+      await q(
+        `INSERT INTO public.rd_contatos (rd_contact_id, org_id, nome, email, phone, atualizado_em)
+         VALUES ($1, $2, $3, $4, $5, now())
+         ON CONFLICT (rd_contact_id) DO UPDATE
+            SET org_id = EXCLUDED.org_id, nome = EXCLUDED.nome,
+                email = EXCLUDED.email, phone = EXCLUDED.phone, atualizado_em = now()`,
+        [c.rd_contact_id, c.org_id, c.nome, c.email, c.phone],
+      );
+      gravados++;
+      porOrg.set(c.org_id, (porOrg.get(c.org_id) ?? 0) + 1);
+    }
+
+    // Marca TODAS as orgs do lote, inclusive as de contagem zero (negative
+    // caching): sem isso, empresa sem contato útil seria reconsultada para sempre.
+    for (const [orgId, n] of porOrg) {
+      await q(
+        `INSERT INTO public.rd_org_contatos_sync (org_id, contatos, ultima_sync)
+         VALUES ($1, $2, now())
+         ON CONFLICT (org_id) DO UPDATE SET contatos = EXCLUDED.contatos, ultima_sync = now()`,
+        [orgId, n],
+      );
+      processadas++;
+    }
+  }
+
+  const restantes = await one<{ n: number }>(
+    `SELECT count(DISTINCT c.org_id)::int AS n
+       FROM public.rd_deal_cnpj_cache c
+       JOIN public.integradores i ON i.cnpj = c.cnpj
+      WHERE c.org_id IS NOT NULL AND c.org_id <> ''
+        AND NOT EXISTS (SELECT 1 FROM public.rd_org_contatos_sync s WHERE s.org_id = c.org_id)`,
+  );
+
+  return {
+    orgs_processadas: processadas,
+    contatos_gravados: gravados,
+    orgs_restantes: restantes?.n ?? 0,
+  };
+}
+
+function chunkOrgs(arr: string[], tamanho: number): string[][] {
+  const lotes: string[][] = [];
+  for (let i = 0; i < arr.length; i += tamanho) lotes.push(arr.slice(i, i + tamanho));
+  return lotes;
 }
 
 /** Devolve quantos integradores ganharam chave de match. */

@@ -11,7 +11,7 @@ import { extractPipelineId, isFunilDeVenda } from "./funis.ts";
 import { resolverAtribuicaoDoDeal } from "./atribuicao.ts";
 import { buildResult, type Canal } from "./utm-builder.ts";
 import { buildAppleLink, buildPlayLink, buildSmartLink, slug } from "./app-links.ts";
-import { enriquecerIntegradores, syncContatosRd } from "./rd-contatos.ts";
+import { enriquecerIntegradores, syncContatosPorOrg, syncContatosRd } from "./rd-contatos.ts";
 import { checarAcesso, criarAudience, enviarLote } from "./publicos-meta-client.ts";
 import {
   chunk,
@@ -947,6 +947,18 @@ async function syncContatosHandler(req: Request): Promise<Response> {
       return json({ error: "Unauthorized" }, 401);
     }
     const body = await req.json().catch(() => ({})) as Record<string, unknown>;
+
+    // Modo por organização — o único que alcança a base inteira. A paginação
+    // simples (modo legado abaixo) morre no registro 10.000 de um filtro, teto
+    // da API do RD: em 27/ago/2026 parou na página 51 com 9.600 de ~190 mil
+    // contatos lidos. Aqui varremos por empresa, e só as que têm integrador.
+    if (body.modo === "por_org") {
+      const limiteOrgs = Number(body.limite_orgs ?? 200);
+      const r = await syncContatosPorOrg(limiteOrgs);
+      const enriquecidos = r.orgs_restantes === 0 ? await enriquecerIntegradores() : 0;
+      return json({ success: true, modo: "por_org", ...r, integradores_enriquecidos: enriquecidos });
+    }
+
     const pagina = Number(body.pagina ?? 1);
     const maxPaginas = Number(body.max_paginas ?? 10);
 

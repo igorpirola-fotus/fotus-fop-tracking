@@ -105,3 +105,29 @@ Deno.test("SQL de enriquecimento prioriza contato COM email, não o mais recente
   assertEquals(SQL_ENRIQUECER_INTEGRADORES.includes("(ct.email IS NOT NULL) DESC"), true);
   assertEquals(SQL_ENRIQUECER_INTEGRADORES.includes("(ct.phone IS NOT NULL) DESC"), true);
 });
+
+// ─── Sync por organização (contorno do teto de 10.000 registros do RD) ───────
+import { montarFiltroOrgs, ORGS_POR_CHAMADA } from "./rd-contatos.ts";
+
+Deno.test("filtro RDQL de várias organizações numa chamada", () => {
+  // Formato validado ao vivo em 27/ago/2026: organization_id:(id1,id2) devolveu
+  // os contatos das duas empresas numa requisição.
+  assertEquals(montarFiltroOrgs(["a1", "b2"]), "organization_id:(a1,b2)");
+});
+
+Deno.test("uma organização só não usa parênteses de lista", () => {
+  assertEquals(montarFiltroOrgs(["a1"]), "organization_id:a1");
+});
+
+Deno.test("lista vazia devolve string vazia (não filtro que pega tudo)", () => {
+  // Um filtro vazio faria a chamada varrer a conta inteira e bater no teto de
+  // 10.000 — exatamente o bug que este modo existe para evitar.
+  assertEquals(montarFiltroOrgs([]), "");
+});
+
+Deno.test("lote de organizações por chamada é conservador", () => {
+  // 20 orgs x ~30 contatos = 600 registros: bem abaixo do teto de 10.000 por
+  // filtro, e ainda assim ~550 chamadas para 11 mil organizações.
+  assertEquals(ORGS_POR_CHAMADA <= 25, true);
+  assertEquals(ORGS_POR_CHAMADA >= 10, true);
+});
