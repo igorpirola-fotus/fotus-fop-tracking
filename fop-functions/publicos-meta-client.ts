@@ -21,6 +21,80 @@ function credenciais(): { adAccount: string; token: string } {
   return { adAccount: adAccount.replace(/^act_/, ""), token };
 }
 
+export type CausaErroMeta =
+  | "token_sem_permissao"
+  | "termos_nao_aceitos"
+  | "token_invalido"
+  | "conta_inacessivel"
+  | "desconhecido";
+
+/**
+ * Traduz o erro cru da Graph na AÇÃO que resolve. Sem isso o operador recebe
+ * "(#200) Permissions error" e não sabe se o problema é o token, os termos ou a
+ * conta — três causas com soluções completamente diferentes.
+ */
+export function interpretarErroMeta(
+  erro: { code?: number; message?: string } | undefined,
+): { causa: CausaErroMeta; acao: string } {
+  const msg = erro?.message ?? "";
+  const code = erro?.code;
+
+  // Termos primeiro: a Meta às vezes devolve isso com códigos variados, e a
+  // mensagem é o sinal confiável.
+  if (/terms of service|termos de servi/i.test(msg)) {
+    return {
+      causa: "termos_nao_aceitos",
+      acao:
+        "Aceitar os Termos de Público Personalizado no Business Manager (Configurações do negócio › Contas de anúncios › Fotus Solar 2025 › Públicos personalizados). Não há API para esse aceite.",
+    };
+  }
+  if (code === 190 || /validating access token|session has expired/i.test(msg)) {
+    return {
+      causa: "token_invalido",
+      acao: "O META_ADS_TOKEN expirou ou foi revogado. Gerar outro no usuário de sistema e atualizar a env no EasyPanel.",
+    };
+  }
+  if (code === 200 || /permissions error/i.test(msg)) {
+    return {
+      causa: "token_sem_permissao",
+      acao:
+        "O token não tem escopo ads_management nesta conta. Gerar token de usuário de sistema com 'Gerenciar campanhas' na conta Fotus Solar 2025.",
+    };
+  }
+  if (/does not exist|cannot be loaded|unsupported get request/i.test(msg)) {
+    return {
+      causa: "conta_inacessivel",
+      acao: "Conferir META_AD_ACCOUNT_ID (esperado 1017764197039855) e se o usuário de sistema tem a conta entre seus ativos.",
+    };
+  }
+  return { causa: "desconhecido", acao: `Erro não mapeado da Meta: ${msg || JSON.stringify(erro ?? null)}` };
+}
+
+/**
+ * Conferência SÓ LEITURA: valida token + termos + acesso à conta sem criar nada.
+ * É o que roda antes do primeiro sync, para não descobrir problema de credencial
+ * no meio de um envio.
+ */
+export async function checarAcesso(): Promise<{
+  ok: boolean;
+  publicos_existentes?: number;
+  causa?: CausaErroMeta;
+  acao?: string;
+}> {
+  const { adAccount, token } = credenciais();
+  const url = `${GRAPH}/${META_API_VERSION}/act_${adAccount}/customaudiences` +
+    `?fields=name&limit=25&access_token=${encodeURIComponent(token)}`;
+
+  const res = await fetch(url);
+  const j = await res.json().catch(() => ({}));
+
+  if (res.ok && Array.isArray(j?.data)) {
+    return { ok: true, publicos_existentes: j.data.length };
+  }
+  const { causa, acao } = interpretarErroMeta(j?.error);
+  return { ok: false, causa, acao };
+}
+
 export async function criarAudience(nome: string, descricao: string): Promise<string> {
   const { adAccount, token } = credenciais();
   const res = await fetch(`${GRAPH}/${META_API_VERSION}/act_${adAccount}/customaudiences`, {

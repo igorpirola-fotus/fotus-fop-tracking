@@ -62,6 +62,21 @@ Causa: o `/track-event` (LP) grava e-mail/telefone; o `rd-sync` (webhook do CRM)
 
 Ambos autenticam com a credencial n8n `FOP rd-sync receiver token` (o mesmo `RD_WEBHOOK_RECEIVER_TOKEN` do `rd-sync`).
 
+**Conferir a credencial antes de qualquer envio** (só leitura; não cria nem loga nada):
+
+```bash
+curl -s -X POST "https://fotus-fop-functions.mk863j.easypanel.host/sync-publicos-meta"   -H "Authorization: Bearer $RD_WEBHOOK_RECEIVER_TOKEN"   -H "Content-Type: application/json" -d '{"check_token":true}'
+```
+
+Resposta `{"ok":true,"publicos_existentes":N}` = token, termos e conta ok. Se vier `ok:false`, o corpo traz `causa` e `acao`:
+
+| `causa` | O que fazer |
+|---|---|
+| `termos_nao_aceitos` | aceitar os Termos de Público Personalizado no Business Manager (não há API) |
+| `token_sem_permissao` | token sem `ads_management` nessa conta — gerar no usuário de sistema com "Gerenciar campanhas" |
+| `token_invalido` | expirou ou foi revogado — gerar outro e atualizar a env |
+| `conta_inacessivel` | conferir `META_AD_ACCOUNT_ID` e se a conta está entre os ativos do usuário de sistema |
+
 **Dry run** (não chama a Meta, só mede e loga):
 
 ```bash

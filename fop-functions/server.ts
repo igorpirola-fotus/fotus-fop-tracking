@@ -12,7 +12,7 @@ import { resolverAtribuicaoDoDeal } from "./atribuicao.ts";
 import { buildResult, type Canal } from "./utm-builder.ts";
 import { buildAppleLink, buildPlayLink, buildSmartLink, slug } from "./app-links.ts";
 import { enriquecerIntegradores, syncContatosRd } from "./rd-contatos.ts";
-import { criarAudience, enviarLote } from "./publicos-meta-client.ts";
+import { checarAcesso, criarAudience, enviarLote } from "./publicos-meta-client.ts";
 import {
   chunk,
   linhaParaData,
@@ -977,6 +977,14 @@ async function syncPublicosMetaHandler(req: Request): Promise<Response> {
     const body = await req.json().catch(() => ({})) as Record<string, unknown>;
     const soEste = typeof body.publico === "string" ? body.publico : null;
     const dryRun = body.dry_run === true;
+
+    // Conferência só leitura de credencial. Roda antes de tudo e não escreve
+    // nada — nem na Meta, nem no log. Serve para descobrir problema de token ou
+    // de termos ANTES de um envio, não no meio dele.
+    if (body.check_token === true) {
+      const r = await checarAcesso();
+      return json({ check_token: true, ...r }, r.ok ? 200 : 424);
+    }
 
     const publicos = await q<{
       publico: string;
