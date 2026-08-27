@@ -12,6 +12,15 @@ import { resolverAtribuicaoDoDeal } from "./atribuicao.ts";
 import { buildResult, type Canal } from "./utm-builder.ts";
 import { buildAppleLink, buildPlayLink, buildSmartLink, slug } from "./app-links.ts";
 import { enriquecerIntegradores, syncContatosRd } from "./rd-contatos.ts";
+import { criarAudience, enviarLote } from "./publicos-meta-client.ts";
+import {
+  chunk,
+  linhaParaData,
+  type LinhaPublico,
+  MAX_POR_CHAMADA,
+  MIN_PUBLICO,
+  montarBody,
+} from "./publicos-meta.ts";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -951,6 +960,143 @@ async function syncContatosHandler(req: Request): Promise<Response> {
   }
 }
 
+// ─────────────────── sync-publicos-meta ──────────────────────────────────────
+// Lê ultron.vw_publico_meta e sincroniza cada público ativo com a Meta.
+// Guardrail: público abaixo de MIN_PUBLICO não sobe (não entrega na Meta e
+// sujaria o log com falso "ok"). Registra TODA rodada em
+// ultron.publicos_meta_sync — a lição dos ETLs é que falha silenciosa é pior
+// que falha.
+async function syncPublicosMetaHandler(req: Request): Promise<Response> {
+  try {
+    const authHeader = req.headers.get("authorization") || "";
+    const receiverToken = Deno.env.get("RD_WEBHOOK_RECEIVER_TOKEN");
+    if (!receiverToken || authHeader !== `Bearer ${receiverToken}`) {
+      return json({ error: "Unauthorized" }, 401);
+    }
+
+    const body = await req.json().catch(() => ({})) as Record<string, unknown>;
+    const soEste = typeof body.publico === "string" ? body.publico : null;
+    const dryRun = body.dry_run === true;
+
+    const publicos = await q<{
+      publico: string;
+      nome_meta: string;
+      descricao: string | null;
+      audience_id: string | null;
+    }>(
+      `SELECT publico, nome_meta, descricao, audience_id
+         FROM ultron.publicos_meta
+        WHERE ativo IS TRUE ${soEste ? "AND publico = $1" : ""}
+        ORDER BY publico`,
+      soEste ? [soEste] : [],
+    );
+
+    const resultados: Record<string, unknown>[] = [];
+
+    for (const p of publicos) {
+      const linhas = await q<LinhaPublico>(
+        `SELECT cnpj, email, phone, nome_contato, cidade, uf, cep
+           FROM ultron.vw_publico_meta WHERE publico = $1`,
+        [p.publico],
+      );
+
+      // Volume mínimo — não gasta chamada nem cria público que não entrega.
+      if (linhas.length < MIN_PUBLICO) {
+        await insert("ultron.publicos_meta_sync", {
+          publico: p.publico,
+          audience_id: p.audience_id,
+          linhas_origem: linhas.length,
+          enviados: 0,
+          lotes: 0,
+          status: "pulado_volume_minimo",
+        });
+        resultados.push({ publico: p.publico, status: "pulado_volume_minimo", linhas: linhas.length });
+        continue;
+      }
+
+      const data: string[][] = [];
+      for (const linha of linhas) data.push(await linhaParaData(linha));
+      const lotes = chunk(data, MAX_POR_CHAMADA);
+      const sessionId = Date.now();
+
+      if (dryRun) {
+        await insert("ultron.publicos_meta_sync", {
+          publico: p.publico,
+          audience_id: p.audience_id,
+          linhas_origem: linhas.length,
+          enviados: 0,
+          lotes: lotes.length,
+          status: "dry_run",
+          session_id: sessionId,
+        });
+        resultados.push({
+          publico: p.publico,
+          status: "dry_run",
+          linhas: linhas.length,
+          lotes: lotes.length,
+        });
+        continue;
+      }
+
+      // Cria o balde só na primeira vez. O audience_id é identidade permanente:
+      // recriar zeraria o aprendizado dos conjuntos que já usam o público.
+      let audienceId = p.audience_id;
+      if (!audienceId) {
+        audienceId = await criarAudience(p.nome_meta, p.descricao ?? p.publico);
+        await update("ultron.publicos_meta", { audience_id: audienceId }, "publico", p.publico);
+      }
+
+      let enviados = 0;
+      let falha: { httpStatus: number; erro?: string } | null = null;
+
+      for (let i = 0; i < lotes.length; i++) {
+        const r = await enviarLote({
+          audienceId,
+          body: montarBody({
+            sessionId,
+            batchSeq: i + 1,
+            ultimo: i === lotes.length - 1,
+            estimadoTotal: data.length,
+            data: lotes[i],
+          }),
+        });
+        if (!r.ok) {
+          falha = { httpStatus: r.httpStatus, erro: r.erro };
+          break;
+        }
+        enviados += lotes[i].length;
+      }
+
+      await insert("ultron.publicos_meta_sync", {
+        publico: p.publico,
+        audience_id: audienceId,
+        linhas_origem: linhas.length,
+        enviados,
+        lotes: lotes.length,
+        status: falha ? "falha" : "ok",
+        http_status: falha?.httpStatus ?? 200,
+        erro: falha?.erro ?? null,
+        session_id: sessionId,
+      });
+
+      if (falha) await logError("sync-publicos-meta", `${p.publico}: ${falha.erro}`);
+      resultados.push({
+        publico: p.publico,
+        audience_id: audienceId,
+        status: falha ? "falha" : "ok",
+        linhas: linhas.length,
+        enviados,
+      });
+    }
+
+    const houveFalha = resultados.some((r) => r.status === "falha");
+    return json({ success: !houveFalha, publicos: resultados }, houveFalha ? 500 : 200);
+  } catch (error) {
+    await logError("sync-publicos-meta", (error as Error).message);
+    return json({ error: (error as Error).message }, 500);
+  }
+}
+
 // ─────────────────────────── router ─────────────────────────────────────────
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: CORS });
@@ -972,5 +1118,6 @@ Deno.serve(async (req: Request) => {
   if (path === "/backfill-integradores") return await backfillHandler(req);
   if (path === "/enrich-cnpj") return await enrichCnpjHandler(req);
   if (path === "/sync-contatos-rd") return await syncContatosHandler(req);
+  if (path === "/sync-publicos-meta") return await syncPublicosMetaHandler(req);
   return json({ error: "not found" }, 404);
 });
