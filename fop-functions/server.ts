@@ -11,6 +11,7 @@ import { extractPipelineId, isFunilDeVenda } from "./funis.ts";
 import { resolverAtribuicaoDoDeal } from "./atribuicao.ts";
 import { buildResult, type Canal } from "./utm-builder.ts";
 import { buildAppleLink, buildPlayLink, buildSmartLink, slug } from "./app-links.ts";
+import { enriquecerIntegradores, syncContatosRd } from "./rd-contatos.ts";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -919,6 +920,35 @@ async function generateUtmApp(req: Request): Promise<Response> {
   }
 }
 
+// ─────────────────── sync-contatos-rd ────────────────────────────────────────
+// Espelha os contatos do RD CRM e enriquece integradores.email/phone.
+// Chamado em loop pelo n8n (mesmo padrão do backfill-integradores): o corpo
+// devolve `proxima_pagina`, e o loop para quando ela vem null.
+//
+// O enriquecimento só roda ao FIM do espelhamento (proxima_pagina === null):
+// rodar a cada página gastaria UPDATE em cima de base incompleta, e a escolha
+// do melhor contato por CNPJ depende de ter todos os contatos da empresa.
+async function syncContatosHandler(req: Request): Promise<Response> {
+  try {
+    const authHeader = req.headers.get("authorization") || "";
+    const receiverToken = Deno.env.get("RD_WEBHOOK_RECEIVER_TOKEN");
+    if (!receiverToken || authHeader !== `Bearer ${receiverToken}`) {
+      return json({ error: "Unauthorized" }, 401);
+    }
+    const body = await req.json().catch(() => ({})) as Record<string, unknown>;
+    const pagina = Number(body.pagina ?? 1);
+    const maxPaginas = Number(body.max_paginas ?? 10);
+
+    const r = await syncContatosRd(pagina, maxPaginas);
+    const enriquecidos = r.proxima_pagina === null ? await enriquecerIntegradores() : 0;
+
+    return json({ success: true, ...r, integradores_enriquecidos: enriquecidos });
+  } catch (error) {
+    await logError("sync-contatos-rd", (error as Error).message);
+    return json({ error: (error as Error).message }, 500);
+  }
+}
+
 // ─────────────────────────── router ─────────────────────────────────────────
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: CORS });
@@ -939,5 +969,6 @@ Deno.serve(async (req: Request) => {
   if (path === "/rd-sync") return await rdSync(req);
   if (path === "/backfill-integradores") return await backfillHandler(req);
   if (path === "/enrich-cnpj") return await enrichCnpjHandler(req);
+  if (path === "/sync-contatos-rd") return await syncContatosHandler(req);
   return json({ error: "not found" }, 404);
 });
