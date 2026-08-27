@@ -65,7 +65,9 @@ Ambos autenticam com a credencial n8n `FOP rd-sync receiver token` (o mesmo `RD_
 **Conferir a credencial antes de qualquer envio** (só leitura; não cria nem loga nada):
 
 ```bash
-curl -s -X POST "https://fotus-fop-functions.mk863j.easypanel.host/sync-publicos-meta" \n  -H "Authorization: Bearer $RD_WEBHOOK_RECEIVER_TOKEN" \n  -H "Content-Type: application/json" -d '{"check_token":true}'
+curl -s -X POST "https://fotus-fop-functions.mk863j.easypanel.host/sync-publicos-meta" \
+  -H "Authorization: Bearer $RD_WEBHOOK_RECEIVER_TOKEN" \
+  -H "Content-Type: application/json" -d '{"check_token":true}'
 ```
 
 Resposta `{"ok":true,"publicos_existentes":N}` = token, termos e conta ok. Se vier `ok:false`, o corpo traz `causa` e `acao`:
