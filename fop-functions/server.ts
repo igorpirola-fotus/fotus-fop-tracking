@@ -132,7 +132,7 @@ async function trackEvent(req: Request): Promise<Response> {
       const payload: Record<string, unknown> = {
         cnpj: cnpjClean,
         email: email || null,
-        phone: phone ? normalizePhone(phone).replace("+", "") : null,
+        phone: (phone && normalizePhone(phone)) || null,
         nome_contato: nome || null,
         estado_operacao: geoState || null,
         cidade_operacao: geoCity || null,
@@ -593,9 +593,17 @@ async function processRdEvent(params: {
   // origem do negocio. Usar a sessao mais recente casava a conversao ao clique
   // errado e deixava recompra de carteira vazar como Purchase de midia por
   // qualquer visita posterior.
+  // ip_address/user_agent entram junto: a Meta lista os dois como recomendados
+  // e o fop-db já os guardava sem nunca enviá-los (achado de 04/set/2026). Vêm
+  // da MESMA sessão que o fbp/fbc, então descrevem o mesmo navegador de origem.
   const attribSession = atrib.session_id
-    ? await one<{ fbp: string | null; fbc: string | null }>(
-      "SELECT fbp, fbc FROM public.sessions WHERE session_id = $1",
+    ? await one<{
+      fbp: string | null;
+      fbc: string | null;
+      ip_address: string | null;
+      user_agent: string | null;
+    }>(
+      "SELECT fbp, fbc, ip_address, user_agent FROM public.sessions WHERE session_id = $1",
       [atrib.session_id],
     )
     : null;
@@ -650,6 +658,8 @@ async function processRdEvent(params: {
     cidade: integrador.cidade_operacao || undefined,
     fbp: attribSession?.fbp || undefined,
     fbc: attribSession?.fbc || undefined,
+    ip: attribSession?.ip_address || undefined,
+    userAgent: attribSession?.user_agent || undefined,
   });
 
   await insert("public.events", {

@@ -10,7 +10,7 @@ Contém as convenções, regras e contexto que devem guiar toda geração de có
 **Empresa:** Fotus Distribuidora Solar — Vila Velha, ES  
 **Mercado:** B2B solar. Os clientes são integradores (instaladores) em todo o Brasil.  
 **Responsável:** Igor — Analista de Mídia Performance  
-**Objetivo:** tracking server-side completo com Advanced Matching propagado em todos os eventos do funil, integrando Meta CAPI + Google Ads + GA4 + RD Station + WhatsApp API + ERP via Supabase como hub central.
+**Objetivo:** tracking server-side completo com Advanced Matching propagado em todos os eventos do funil, integrando Meta CAPI + Google Ads + GA4 + RD Station + WhatsApp API como hub central de dados. **Fonte de vendas = exclusivamente o RD Station CRM; o ERP NÃO é integrado** (grava direto no card do CRM — nº do pedido + Ganho/Perdido — e o dado chega ao projeto pelo webhook do CRM). Ver premissa detalhada em "Purchase" abaixo.
 
 **Leia antes de qualquer tarefa:**
 - `docs/00-baseline.md` — métricas atuais e acessos
@@ -44,9 +44,14 @@ Estas regras são inegociáveis. Se uma tarefa exigir violar qualquer uma, pare 
 ### 1. Hash SHA-256 obrigatório em todos os dados PII
 Antes de qualquer envio ao Meta, Google Ads ou qualquer API externa:
 - `email` → `hashValue(email.toLowerCase().trim())`
-- `phone` → `hashValue(normalizePhone(phone))` — sempre E.164 (+5527...)
-- `nome` → split em fn/ln, hash individual
-- `cidade`, `estado`, `cep` → hash individual
+- `phone` → `hashValue(normalizePhone(phone))` — **só dígitos, sem o `+`** (`5527...`). A Meta manda remover símbolos; o `+` é símbolo e invalidava o match (corrigido em 04/set/2026)
+- `nome` → `normalizeName()` (sem acento, sem pontuação), split em fn/ln, hash individual
+- `cidade`, `estado` → `normalizeGeo()` (sem acento e **sem espaço**: "belohorizonte"); `cep` → só dígitos
+- `country` → também vai hasheado, nunca em texto puro
+
+> A régua completa, campo a campo, está em `docs/16-meta-capi-boas-praticas.md`.
+> Normalização errada não degrada o match: **zera** — e o painel da Meta segue
+> mostrando 100% de "cobertura". Nunca normalizar depois do hash.
 - **NUNCA** enviar PII em texto claro para qualquer API
 
 ```typescript
@@ -86,10 +91,12 @@ body: JSON.stringify({ email: params.email })
 - A deduplicação (via event_id) garante que o Meta não conta em dobro
 - Só remover o client-side após aprovação explícita do Igor
 
-### 7. Purchase = apenas primeiro pedido
-- `is_first_order: true` no webhook ERP → evento `Purchase`
-- Pedidos subsequentes → evento `PurchaseRecorrente`
-- Isso protege o algoritmo de otimização de aquisição
+### 7. Purchase = apenas primeiro pedido (fonte = CRM, NÃO ERP)
+- **Fonte de vendas = exclusivamente o RD Station CRM.** O ERP **não** é integrado (sem `erp-sync`, sem webhook de ERP). O ERP já grava no card do CRM: nº do pedido e marcação **Ganho** (venda) ou **Perdido/cancelado**.
+- `Purchase` = deal marcado como **Ganho** no CRM → `crm_deal_updated` (status `won`) → `rd-sync`.
+- 1º pedido vs recorrente = derivado de `integradores.numero_pedidos` (histórico de deals Ganhos): 1º → `Purchase`; subsequentes → `PurchaseRecorrente`.
+- `OportunidadePerdida` = deal **Perdido** no CRM (status `lost`) → `rd-sync`.
+- Isso protege o algoritmo de otimização de aquisição. **`erp-sync` está descontinuado em definitivo.**
 
 ### 8. Campanhas nunca otimizam por Lead bruto
 - O objetivo das campanhas de aquisição é a Custom Conversion "Lead Qualificado Fotus"
@@ -197,11 +204,11 @@ await new Promise(r => setTimeout(r, 100))  // 100ms entre eventos
 | Tabela | Chave | Escrito por | Lido por |
 |---|---|---|---|
 | `sessions` | `session_id` (text) | `track-event` | analytics, scoring |
-| `integradores` | `cnpj` (text unique) | `track-event`, `rd-sync`, `erp-sync` | todas |
+| `integradores` | `cnpj` (text unique) | `track-event`, `rd-sync` | todas |
 | `events` | `event_id` (text unique) | todas as funções | analytics, dashboard |
 | `rfm_snapshots` | `(integrador_id, snapshot_date)` | `rfm-update` | Meta audiências |
 | `whatsapp_interactions` | `id` (uuid) | `whatsapp-handler` | analytics, NPS |
-| `pipeline_snapshots` | `(snapshot_date, stage_name)` | `erp-sync` | forecast |
+| `pipeline_snapshots` | `(snapshot_date, stage_name)` | — (sem fonte — ERP descontinuado; derivar dos deals do CRM se o forecast for retomado) | forecast |
 | `nps_responses` | `id` (uuid) | `whatsapp-handler` | scoring, GMB |
 | `lead_score_log` | `id` (uuid) | `enrich-cnpj`, `rfm-update` | SDR |
 | `error_logs` | `id` (uuid) | todas | monitoramento |
@@ -245,7 +252,7 @@ track-event (Edge Function)
 | `Contact` | Webhook RD: etapa "Em Contato" | `crm` |
 | `Schedule` | Webhook RD: etapa "Qualificado" | `crm` |
 | `AddToCart` | Webhook RD: etapa "Proposta Enviada" | `crm` |
-| `Purchase` | Webhook ERP: primeiro pedido aprovado | `crm` |
+| `Purchase` | Webhook RD: deal marcado como Ganho (status `won`) | `crm` |
 | `OportunidadePerdida` | Webhook RD: deal Perdido | `crm` |
 
 ### Funil 2 — Reativação (inativos 90d+)
@@ -368,8 +375,8 @@ GADS_CUSTOMER_ID           ID do cliente Google Ads (sem hífens)
 # Google Meu Negócio
 GOOGLE_SERVICE_ACCOUNT_JSON    JSON completo da service account (como string)
 
-# ERP
-ERP_WEBHOOK_SECRET         Secret para validar webhooks do ERP
+# ERP — DESCONTINUADO (sem integração de ERP; fonte de vendas = só CRM)
+# ERP_WEBHOOK_SECRET       (não usado — erp-sync removido)
 ```
 
 ---

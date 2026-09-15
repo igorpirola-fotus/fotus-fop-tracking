@@ -14,13 +14,52 @@ export async function hashValue(value: string): Promise<string> {
   return hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-// ─── Normalização de telefone (E.164) ────────────────────────────────────────
+// ─── Normalização (doc oficial da Meta, lida em 04/set/2026) ─────────────────
+// Toda normalização acontece ANTES do hash. Errar aqui não degrada o match:
+// zera. E é invisível no painel — o campo aparece com 100% de "cobertura"
+// mesmo casando 0%. Ver docs/16-meta-capi-boas-praticas.md.
+
+/** Remove acento mantendo a letra base: "josé" → "jose". */
+function semAcento(v: string): string {
+  return v.normalize("NFD").replace(/[̀-ͯ]/g, "");
+}
+
+// Telefone — regra literal da Meta: "Remove symbols, letters, and any leading
+// zeros. Phone numbers must include a country code to be used for matching."
+// O `+` É símbolo: até 04/set/2026 esta função devolvia "+55..." e o hash saía
+// com ele, o que invalidava o match de TODO evento do rd-sync e dos públicos.
+// Devolve "" quando o número não é reconhecível — telefone quebrado não casa
+// com ninguém, e mandá-lo só infla a cobertura aparente no painel.
 export function normalizePhone(phone: string): string {
   if (!phone) return "";
-  const digits = phone.replace(/\D/g, "");
-  if (digits.startsWith("55") && digits.length >= 12) return `+${digits}`;
-  if (digits.length === 11 || digits.length === 10) return `+55${digits}`;
-  return `+55${digits}`;
+  const digitos = phone.replace(/\D/g, "").replace(/^0+/, "");
+
+  // 12 = 55 + DDD + 8 (fixo); 13 = 55 + DDD + 9 (celular). Só nesses tamanhos
+  // o "55" da frente é código de país — em 10/11 dígitos ele é o DDD do RS.
+  const local = (digitos.length === 12 || digitos.length === 13) && digitos.startsWith("55")
+    ? digitos.slice(2)
+    : digitos;
+
+  if (local.length !== 10 && local.length !== 11) return "";
+
+  // Celular antigo de 8 dígitos (DDD + 8 começando em 6-9) → insere o 9.
+  // Fixo começa em 2-5 e fica como está. Mesma régua do import do RD CRM.
+  const ajustado = local.length === 10 && /^[6-9]/.test(local.slice(2))
+    ? `${local.slice(0, 2)}9${local.slice(2)}`
+    : local;
+
+  return `55${ajustado}`;
+}
+
+/** Nome (fn/ln): minúscula, sem acento, sem pontuação. */
+export function normalizeName(v: string): string {
+  return semAcento(v).toLowerCase().replace(/[^a-z\s]/g, "").replace(/\s+/g, " ").trim();
+}
+
+/** Cidade/UF (ct/st): minúscula, sem acento, sem pontuação e SEM ESPAÇO —
+ *  a Meta exige "belohorizonte", não "belo horizonte". */
+export function normalizeGeo(v: string): string {
+  return semAcento(v).toLowerCase().replace(/[^a-z0-9]/g, "");
 }
 
 // ─── Construção do user_data com Advanced Matching ───────────────────────────
@@ -45,12 +84,18 @@ export async function buildUserData(params: {
     if (normalized) ud.ph = [await hashValue(normalized)];
   }
   if (params.nome) {
-    const parts = params.nome.trim().split(" ");
+    const parts = normalizeName(params.nome).split(" ").filter(Boolean);
     if (parts[0]) ud.fn = [await hashValue(parts[0])];
     if (parts.length > 1) ud.ln = [await hashValue(parts.slice(1).join(" "))];
   }
-  if (params.cidade) ud.ct = [await hashValue(params.cidade)];
-  if (params.estado) ud.st = [await hashValue(params.estado.toLowerCase())];
+  if (params.cidade) {
+    const ct = normalizeGeo(params.cidade);
+    if (ct) ud.ct = [await hashValue(ct)];
+  }
+  if (params.estado) {
+    const st = normalizeGeo(params.estado);
+    if (st) ud.st = [await hashValue(st)];
+  }
   if (params.cep) ud.zp = [await hashValue(params.cep.replace(/\D/g, ""))];
 
   // external_id = sha256 do CNPJ (só dígitos). É a chave de match B2B estável:
@@ -62,7 +107,9 @@ export async function buildUserData(params: {
     if (digitos) ud.external_id = [await hashValue(digitos)];
   }
 
-  ud.country = ["br"];
+  // `country` está na lista de campos que a Meta EXIGE hasheado — ia em texto
+  // puro até 04/set/2026 e era simplesmente descartado.
+  ud.country = [await hashValue("br")];
   if (params.ip) ud.client_ip_address = params.ip;
   if (params.userAgent) ud.client_user_agent = params.userAgent;
   if (params.fbp) ud.fbp = params.fbp;

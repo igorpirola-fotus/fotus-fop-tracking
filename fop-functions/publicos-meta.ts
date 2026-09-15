@@ -9,7 +9,7 @@
 // EXTERN_ID vai hasheado (sha256 do CNPJ) DE PROPÓSITO: tem de ser byte-a-byte
 // igual ao `external_id` que o capi-sender manda nos eventos, senão a Meta não
 // casa público com evento. Consistência importa mais que o formato.
-import { hashValue, normalizePhone } from "./capi-sender.ts";
+import { hashValue, normalizeGeo, normalizeName, normalizePhone } from "./capi-sender.ts";
 
 export const SCHEMA_META = [
   "EMAIL",
@@ -38,9 +38,9 @@ export type LinhaPublico = {
   cep: string | null;
 };
 
-function limpaTexto(v: string): string {
-  return v.trim().toLowerCase().replace(/[.,'"`^~]/g, "").replace(/\s+/g, " ");
-}
+// A normalização vive em capi-sender.ts DE PROPÓSITO: público e evento têm de
+// produzir o mesmo hash para o mesmo cliente. Duas implementações = duas regras
+// que divergem na primeira manutenção.
 
 export async function linhaParaData(linha: LinhaPublico): Promise<string[]> {
   const email = linha.email ? await hashValue(linha.email.trim().toLowerCase()) : "";
@@ -53,13 +53,15 @@ export async function linhaParaData(linha: LinhaPublico): Promise<string[]> {
 
   let fn = "", ln = "";
   if (linha.nome_contato) {
-    const partes = limpaTexto(linha.nome_contato).split(" ").filter(Boolean);
+    const partes = normalizeName(linha.nome_contato).split(" ").filter(Boolean);
     if (partes[0]) fn = await hashValue(partes[0]);
     if (partes.length > 1) ln = await hashValue(partes.slice(1).join(" "));
   }
 
-  const ct = linha.cidade ? await hashValue(limpaTexto(linha.cidade)) : "";
-  const st = linha.uf ? await hashValue(limpaTexto(linha.uf)) : "";
+  const cidadeLimpa = linha.cidade ? normalizeGeo(linha.cidade) : "";
+  const ufLimpa = linha.uf ? normalizeGeo(linha.uf) : "";
+  const ct = cidadeLimpa ? await hashValue(cidadeLimpa) : "";
+  const st = ufLimpa ? await hashValue(ufLimpa) : "";
   const cepDigitos = linha.cep ? linha.cep.replace(/\D/g, "") : "";
   const zip = cepDigitos ? await hashValue(cepDigitos) : "";
   const country = await hashValue("br");

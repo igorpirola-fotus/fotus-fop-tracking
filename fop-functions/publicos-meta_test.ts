@@ -31,15 +31,15 @@ Deno.test("telefone usa a mesma normalização do CAPI", async () => {
   assertEquals(data[1], await hashValue(normalizePhone("(11) 98888-7777")));
 });
 
-Deno.test("nome é quebrado em FN e LN", async () => {
+Deno.test("nome é quebrado em FN e LN, sem acento", async () => {
   const data = await linhaParaData(LINHA);
-  assertEquals(data[2], await hashValue("joão"));
+  assertEquals(data[2], await hashValue("joao"));
   assertEquals(data[3], await hashValue("da silva"));
 });
 
-Deno.test("geo minúsculo, CEP só dígitos, país fixo br", async () => {
+Deno.test("geo sem acento e SEM ESPAÇO, CEP só dígitos, país fixo br", async () => {
   const data = await linhaParaData(LINHA);
-  assertEquals(data[4], await hashValue("são paulo"));
+  assertEquals(data[4], await hashValue("saopaulo"));
   assertEquals(data[5], await hashValue("sp"));
   assertEquals(data[6], await hashValue("01310100"));
   assertEquals(data[7], await hashValue("br"));
