@@ -170,6 +170,128 @@ export async function syncContatosRd(paginaInicial: number, maxPaginas: number):
   return { paginas, contatos_lidos: lidos, contatos_gravados: gravados, proxima_pagina: proxima };
 }
 
+// ─────────────────── modo incremental ────────────────────────────────────────
+// POR QUE: o full scan (por organização) percorre ~12.000 empresas, UMA
+// requisição cada — ~90 min por rodada — para capturar o que muda em algumas
+// centenas de contatos por dia. Medido ao vivo em 15/set/2026:
+// `updated_at:>=<anteontem>` devolveu 285 contatos, 2 páginas. Full scan é
+// BOOTSTRAP (roda uma vez); o dia a dia é ESTE modo.
+//
+// MARCO: max(atualizado_em) de rd_contatos — a última vez que ESTE sync gravou.
+// Dispensa tabela de controle: a própria tabela espelho carrega o relógio.
+// Base vazia => devolve bootstrap=true e o chamador decide (não varre sozinho).
+//
+// OVERLAP: a API do RD NÃO ordena por updated_at (sort aceita só name e
+// created_at), então paginar um filtro enquanto registros mudam pode escorregar
+// um registro entre páginas. Reprocessar algumas horas a mais é barato — o
+// upsert é idempotente — e evita buraco silencioso, que é o pior defeito aqui.
+
+/**
+ * Filtro RDQL do incremental. Usa DATA (não datetime): o RD aceita `2026-09-14`
+ * sem as aspas duplas que o formato datetime exige, e a granularidade de dia é
+ * suficiente porque o overlap já cobre a borda.
+ */
+export function montarFiltroIncremental(desde: Date, overlapHoras = 24): string {
+  const inicio = new Date(desde.getTime() - overlapHoras * 3_600_000);
+  return `updated_at:>=${inicio.toISOString().slice(0, 10)}`;
+}
+
+export async function syncContatosIncremental(maxPaginas: number, overlapHoras = 24): Promise<{
+  modo: "incremental";
+  bootstrap_necessario: boolean;
+  desde: string | null;
+  filtro: string | null;
+  paginas: number;
+  contatos_lidos: number;
+  contatos_gravados: number;
+  proxima_pagina: number | null;
+}> {
+  const marco = await one<{ m: string | null }>(
+    `SELECT max(atualizado_em) AS m FROM public.rd_contatos`,
+  );
+  if (!marco?.m) {
+    // Espelho vazio: incremental não tem de onde partir. Não cair em full scan
+    // por conta própria — varrer 12k empresas tem custo de cota e de tempo, e
+    // quem paga essa conta decide.
+    return {
+      modo: "incremental",
+      bootstrap_necessario: true,
+      desde: null,
+      filtro: null,
+      paginas: 0,
+      contatos_lidos: 0,
+      contatos_gravados: 0,
+      proxima_pagina: null,
+    };
+  }
+
+  const filtro = montarFiltroIncremental(new Date(marco.m), overlapHoras);
+  let pagina = 1, lidos = 0, gravados = 0, paginas = 0;
+  let proxima: number | null = null;
+
+  while (paginas < maxPaginas) {
+    const token = await getAccessToken();
+    const url = `${RD_API}/crm/v2/contacts?filter=${encodeURIComponent(filtro)}` +
+      `&page%5Bnumber%5D=${pagina}&page%5Bsize%5D=${PAGE_SIZE}`;
+    const res = await fetch(url, {
+      headers: { Authorization: `Bearer ${token}`, Accept: "application/json" },
+    });
+
+    // 429 = teto de 120 req/min. Devolver o cursor em vez de morrer.
+    if (res.status === 429) {
+      return {
+        modo: "incremental",
+        bootstrap_necessario: false,
+        desde: marco.m,
+        filtro,
+        paginas,
+        contatos_lidos: lidos,
+        contatos_gravados: gravados,
+        proxima_pagina: pagina,
+      };
+    }
+    if (!res.ok) {
+      throw new Error(`GET /crm/v2/contacts (incremental) p${pagina}: ${res.status} ${await res.text()}`);
+    }
+
+    const itens = extrairItens(await res.json());
+    lidos += itens.length;
+    paginas++;
+
+    for (const item of itens) {
+      const c = parseContato(item);
+      if (!c) continue;
+      await q(
+        `INSERT INTO public.rd_contatos (rd_contact_id, org_id, nome, email, phone, atualizado_em)
+         VALUES ($1, $2, $3, $4, $5, now())
+         ON CONFLICT (rd_contact_id) DO UPDATE
+            SET org_id = EXCLUDED.org_id, nome = EXCLUDED.nome,
+                email = EXCLUDED.email, phone = EXCLUDED.phone, atualizado_em = now()`,
+        [c.rd_contact_id, c.org_id, c.nome, c.email, c.phone],
+      );
+      gravados++;
+    }
+
+    if (itens.length < PAGE_SIZE) {
+      proxima = null;
+      break;
+    }
+    pagina++;
+    proxima = pagina;
+  }
+
+  return {
+    modo: "incremental",
+    bootstrap_necessario: false,
+    desde: marco.m,
+    filtro,
+    paginas,
+    contatos_lidos: lidos,
+    contatos_gravados: gravados,
+    proxima_pagina: proxima,
+  };
+}
+
 // ─────────────────── modo por organização ────────────────────────────────────
 // A paginação simples de /crm/v2/contacts morre no registro 10.000 ("It is only
 // possible to list the first 10,000 records of the specified filter" — erro 400

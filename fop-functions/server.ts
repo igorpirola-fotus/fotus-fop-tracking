@@ -11,7 +11,12 @@ import { extractPipelineId, isFunilDeVenda } from "./funis.ts";
 import { resolverAtribuicaoDoDeal } from "./atribuicao.ts";
 import { buildResult, type Canal } from "./utm-builder.ts";
 import { buildAppleLink, buildPlayLink, buildSmartLink, slug } from "./app-links.ts";
-import { enriquecerIntegradores, syncContatosPorOrg, syncContatosRd } from "./rd-contatos.ts";
+import {
+  enriquecerIntegradores,
+  syncContatosIncremental,
+  syncContatosPorOrg,
+  syncContatosRd,
+} from "./rd-contatos.ts";
 import { checarAcesso, criarAudience, enviarLote } from "./publicos-meta-client.ts";
 import {
   chunk,
@@ -962,6 +967,20 @@ async function syncContatosHandler(req: Request): Promise<Response> {
     // simples (modo legado abaixo) morre no registro 10.000 de um filtro, teto
     // da API do RD: em 27/ago/2026 parou na página 51 com 9.600 de ~190 mil
     // contatos lidos. Aqui varremos por empresa, e só as que têm integrador.
+    // Modo incremental — o DIA A DIA. Busca só o que mudou no RD desde a última
+    // gravação (filtro updated_at), em vez de varrer a base inteira. Medido em
+    // 15/set/2026: 285 contatos em 2 dias contra ~12.000 organizações do full
+    // scan. O enriquecimento roda ao fim, igual aos outros modos.
+    if (body.modo === "incremental") {
+      const maxPaginas = Number(body.max_paginas ?? 25);
+      const overlapHoras = Number(body.overlap_horas ?? 24);
+      const r = await syncContatosIncremental(maxPaginas, overlapHoras);
+      const enriquecidos = (!r.bootstrap_necessario && r.proxima_pagina === null)
+        ? await enriquecerIntegradores()
+        : 0;
+      return json({ success: true, ...r, integradores_enriquecidos: enriquecidos });
+    }
+
     if (body.modo === "por_org") {
       const limiteOrgs = Number(body.limite_orgs ?? 200);
       const r = await syncContatosPorOrg(limiteOrgs);

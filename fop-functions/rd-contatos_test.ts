@@ -4,7 +4,34 @@
 // 27/ago/2026): emails[].email, phones[].phone, organization_id. Contato sem
 // empresa não serve para público (não há como ligar ao CNPJ) e é descartado.
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { parseContato, SQL_ENRIQUECER_INTEGRADORES } from "./rd-contatos.ts";
+import {
+  montarFiltroIncremental,
+  parseContato,
+  SQL_ENRIQUECER_INTEGRADORES,
+} from "./rd-contatos.ts";
+
+// ── modo incremental ─────────────────────────────────────────────────────────
+
+Deno.test("filtro incremental recua o overlap e usa data (nao datetime)", () => {
+  // datetime no RDQL exigiria aspas duplas duplicadas; data simples nao.
+  const filtro = montarFiltroIncremental(new Date("2026-09-15T17:00:00Z"), 24);
+  assertEquals(filtro, "updated_at:>=2026-09-14");
+});
+
+Deno.test("overlap zero usa o proprio dia do marco", () => {
+  const filtro = montarFiltroIncremental(new Date("2026-09-15T17:00:00Z"), 0);
+  assertEquals(filtro, "updated_at:>=2026-09-15");
+});
+
+Deno.test("overlap atravessa virada de mes", () => {
+  const filtro = montarFiltroIncremental(new Date("2026-03-01T02:00:00Z"), 24);
+  assertEquals(filtro, "updated_at:>=2026-02-28");
+});
+
+Deno.test("overlap maior que um dia recua o numero de dias correspondente", () => {
+  const filtro = montarFiltroIncremental(new Date("2026-09-15T17:00:00Z"), 72);
+  assertEquals(filtro, "updated_at:>=2026-09-12");
+});
 
 Deno.test("extrai primeiro email e primeiro telefone", () => {
   const c = {
