@@ -10,6 +10,7 @@ Parte da migração Supabase → EasyPanel (ver `docs/superpowers/plans/DISCOVER
 - `POST /enrich-cnpj` — `{ cnpj, integrador_id }` (BrasilAPI + lead score).
 - `POST /sync-contatos-rd` — espelha contatos do RD CRM em `public.rd_contatos` e enriquece `integradores.email/phone` via `org_id → cnpj`; paginado (`{pagina, max_paginas}` → `proxima_pagina`, que também é devolvida em caso de HTTP 429 para o chamador retomar); autenticado com `RD_WEBHOOK_RECEIVER_TOKEN`. Loop no n8n: workflow `6h1YEDa7XtE9cFuN`.
 - `POST /sync-publicos-meta` — sincroniza `ultron.vw_publico_meta` com as Custom Audiences da Meta via `usersreplace` (lotes de 10.000); aceita `{publico, dry_run}`; público com menos de 1.000 linhas é pulado; toda rodada vira linha em `ultron.publicos_meta_sync`. Cron no n8n: workflow `UE5B3a5VCvgmJVPi`. Ver `docs/15-publicos-meta.md`.
+- `POST /rd-token` — devolve `{access_token, expiry, validade_min}` do RD CRM (cadeia OAuth do FOP, `public.oauth_tokens`), com validade garantida ≥ 15 min (renova na hora se preciso). Autenticado com `RD_WEBHOOK_RECEIVER_TOKEN`. Consumido pelo Rotacionador (`nItxTT7QTG3ZWhlC`) no lugar da Ponte da Solange. `Cache-Control: no-store`.
 - `GET /health` — checa conexão com o banco (`{ ok: true }`).
 
 ## Arquivos

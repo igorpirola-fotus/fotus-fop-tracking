@@ -73,6 +73,31 @@ export async function getAccessToken(): Promise<string> {
   return await refreshAccessToken();
 }
 
+/**
+ * Token + expiração, garantindo pelo menos `minValidityMs` de validade.
+ * Usado pela rota /rd-token (Rotacionador no n8n). Renova pelo MESMO caminho
+ * de escritor único (refreshAccessToken, com advisory lock) — nunca em paralelo.
+ */
+export async function getAccessTokenInfo(
+  minValidityMs: number,
+): Promise<{ accessToken: string; expiresAtMs: number }> {
+  await getAccessToken(); // garante seed/refresh básico (margem de 5 min)
+  let row = await one<TokenRow>(
+    "SELECT access_token, refresh_token, expires_at FROM public.oauth_tokens WHERE provider = $1",
+    [PROVIDER],
+  );
+  if (!row) throw new Error("oauth_tokens sem registro rd_crm");
+  if (new Date(row.expires_at).getTime() - Date.now() < minValidityMs) {
+    await refreshAccessToken();
+    row = await one<TokenRow>(
+      "SELECT access_token, refresh_token, expires_at FROM public.oauth_tokens WHERE provider = $1",
+      [PROVIDER],
+    );
+    if (!row) throw new Error("oauth_tokens sem registro rd_crm");
+  }
+  return { accessToken: row.access_token, expiresAtMs: new Date(row.expires_at).getTime() };
+}
+
 async function refreshAccessToken(): Promise<string> {
   if (inflightRefresh) return await inflightRefresh;
 

@@ -4,7 +4,8 @@
 import { insert, logError, one, q, update } from "./db.ts";
 import { buildUserData, normalizePhone, sendToCAPI } from "./capi-sender.ts";
 import { sendToGA4 } from "./ga4-sender.ts";
-import { listWonDeals, resolveDealCnpj, wonDealsMeta } from "./rd-crm-client.ts";
+import { getAccessTokenInfo, listWonDeals, resolveDealCnpj, wonDealsMeta } from "./rd-crm-client.ts";
+import { MIN_VALIDADE_MS, montarRespostaToken } from "./rd-token.ts";
 import { cleanCnpj, findCnpjDeep } from "./cnpj.ts";
 import { backfillWon, preencherPipelines } from "./backfill-integradores.ts";
 import { extractPipelineId, isFunilDeVenda } from "./funis.ts";
@@ -946,6 +947,29 @@ async function generateUtmApp(req: Request): Promise<Response> {
   }
 }
 
+// ─────────────────────── rd-token ───────────────────────────────────────────
+// Entrega o access token do RD CRM do FOP ao Rotacionador (n8n), que deixou de
+// depender da cadeia OAuth da Solange. Mesma auth das rotas /sync-*.
+// NUNCA logar o token.
+async function rdTokenHandler(req: Request): Promise<Response> {
+  const authHeader = req.headers.get("authorization") || "";
+  const receiverToken = Deno.env.get("RD_WEBHOOK_RECEIVER_TOKEN");
+  if (!receiverToken || authHeader !== `Bearer ${receiverToken}`) {
+    return json({ error: "Unauthorized" }, 401);
+  }
+  try {
+    const { accessToken, expiresAtMs } = await getAccessTokenInfo(MIN_VALIDADE_MS);
+    const body = montarRespostaToken(accessToken, expiresAtMs, Date.now());
+    return new Response(JSON.stringify(body), {
+      status: 200,
+      headers: { "Content-Type": "application/json", "Cache-Control": "no-store" },
+    });
+  } catch (error) {
+    await logError("rd-token", (error as Error).message);
+    return json({ error: "token_indisponivel" }, 503);
+  }
+}
+
 // ─────────────────── sync-contatos-rd ────────────────────────────────────────
 // Espelha os contatos do RD CRM e enriquece integradores.email/phone.
 // Chamado em loop pelo n8n (mesmo padrão do backfill-integradores): o corpo
@@ -1167,6 +1191,7 @@ Deno.serve(async (req: Request) => {
   if (path === "/backfill-integradores") return await backfillHandler(req);
   if (path === "/enrich-cnpj") return await enrichCnpjHandler(req);
   if (path === "/sync-contatos-rd") return await syncContatosHandler(req);
+  if (path === "/rd-token") return await rdTokenHandler(req);
   if (path === "/sync-publicos-meta") return await syncPublicosMetaHandler(req);
   return json({ error: "not found" }, 404);
 });
