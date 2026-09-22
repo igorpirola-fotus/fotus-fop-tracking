@@ -18,6 +18,7 @@
 
 import { one, q, withAdvisoryLock } from "./db.ts";
 import { cleanCnpj, findCnpjDeep } from "./cnpj.ts";
+import { precisaRenovar } from "./rd-token.ts";
 
 const RD_API = "https://api.rd.services";
 const PROVIDER = "rd_crm";
@@ -87,8 +88,10 @@ export async function getAccessTokenInfo(
     [PROVIDER],
   );
   if (!row) throw new Error("oauth_tokens sem registro rd_crm");
-  if (new Date(row.expires_at).getTime() - Date.now() < minValidityMs) {
-    await refreshAccessToken();
+  // Até 2 tentativas: a 1ª pode ter pegado carona num refresh em andamento pedido com a
+  // margem padrão (single-flight), que não garante o mínimo daqui.
+  for (let i = 0; i < 2 && precisaRenovar(new Date(row.expires_at).getTime(), Date.now(), minValidityMs); i++) {
+    await refreshAccessToken(minValidityMs);
     row = await one<TokenRow>(
       "SELECT access_token, refresh_token, expires_at FROM public.oauth_tokens WHERE provider = $1",
       [PROVIDER],
@@ -98,7 +101,7 @@ export async function getAccessTokenInfo(
   return { accessToken: row.access_token, expiresAtMs: new Date(row.expires_at).getTime() };
 }
 
-async function refreshAccessToken(): Promise<string> {
+async function refreshAccessToken(minValidityMs: number = RENEW_MARGIN_MS): Promise<string> {
   if (inflightRefresh) return await inflightRefresh;
 
   inflightRefresh = withAdvisoryLock(LOCK_KEY_TOKEN_REFRESH, async (run) => {
@@ -109,7 +112,8 @@ async function refreshAccessToken(): Promise<string> {
     );
     const cur = rows[0];
     if (!cur) throw new Error("oauth_tokens: registro rd_crm desapareceu");
-    if (Date.now() + RENEW_MARGIN_MS < new Date(cur.expires_at).getTime()) {
+    // Usa o mínimo de QUEM PEDIU (o /rd-token pede 15 min; o resto, a margem de 5).
+    if (!precisaRenovar(new Date(cur.expires_at).getTime(), Date.now(), minValidityMs)) {
       return cur.access_token;
     }
 

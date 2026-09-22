@@ -3,6 +3,16 @@
 // 27/ago e 15/set). O n8n só LÊ; quem renova é o refreshAccessToken().
 export const MIN_VALIDADE_MS = 15 * 60 * 1000;
 
+/**
+ * O token precisa ser renovado para garantir `minValidityMs` de validade?
+ * O refresh (dentro do lock) usa o MÍNIMO DE QUEM PEDIU, não só a margem padrão:
+ * com a margem fixa de 5 min, o /rd-token (que exige 15) ficava sem renovação
+ * entre 5 e 15 min e devolvia 503 (bug de 21-22/09).
+ */
+export function precisaRenovar(expiresAtMs: number, nowMs: number, minValidityMs: number): boolean {
+  return nowMs + minValidityMs > expiresAtMs;
+}
+
 export function montarRespostaToken(
   accessToken: string,
   expiresAtMs: number,
