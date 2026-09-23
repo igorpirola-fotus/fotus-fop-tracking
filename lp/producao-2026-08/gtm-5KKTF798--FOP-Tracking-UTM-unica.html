@@ -28,8 +28,13 @@
   var DIAS_COOKIE    = 90;
   var EDGE_URL       = 'https://fotus-fop-functions.mk863j.easypanel.host/track-event';
 
-  var CHAVES = ['utm_source','utm_medium','utm_campaign','utm_term','utm_content',
-                'gclid','gbraid','wbraid','fbclid'];
+  var UTMS   = ['utm_source','utm_medium','utm_campaign','utm_term','utm_content'];
+  var IDS    = ['gclid','gbraid','wbraid','fbclid'];
+  var CHAVES = UTMS.concat(IDS);
+
+  // utm_source dos links do próprio site (banners da home). Serve para o GA4
+  // contar clique no banner, mas NÃO pode apagar a origem paga que já está no cookie.
+  var ORIGEM_INTERNA = 'site';
 
   /* ========================================================================
      AJUDANTES DE COOKIE
@@ -43,6 +48,11 @@
     var exp = new Date(Date.now() + (dias || DIAS_COOKIE) * 864e5).toUTCString();
     document.cookie = nome + '=' + encodeURIComponent(valor) +
       ';expires=' + exp + ';path=/;domain=' + DOMINIO_COOKIE + ';SameSite=Lax';
+  }
+  function apagarCookie(nome) {
+    var passado = ';expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/';
+    document.cookie = nome + '=' + passado + ';domain=' + DOMINIO_COOKIE;
+    document.cookie = nome + '=' + passado;   // versão sem domínio, de implementações antigas
   }
   function daUrl(nome) {
     var qs = new URLSearchParams(location.search);
@@ -77,25 +87,51 @@
 
   /* ========================================================================
      1) RESOLVER E GUARDAR
-     Regra: o que veio na URL agora vence o cookie antigo.
+     Regras:
+       · UTM é um CONJUNTO: se a URL trouxe qualquer utm_*, o conjunto inteiro
+         é trocado (o que não veio fica vazio). Nunca mistura com o cookie velho.
+       · UTM interna (utm_source=site, banners da home) só grava se não houver
+         origem externa no cookie. Assim o anúncio não perde o lead para o banner.
+       · IDs de clique (gclid, fbclid…) seguem valor a valor: URL > cookie.
      ===================================================================== */
   var VALORES = {};
 
   (function resolver() {
+    var doCookie = {};
     CHAVES.forEach(function (chave) {
-      var daUrlAgora = padronizar(chave, daUrl(chave));
-      var doCookie   = lerCookie(chave);
-
+      doCookie[chave] = lerCookie(chave);
       // migra uma única vez o que ficou preso no localStorage das versões antigas
-      if (!doCookie) {
+      if (!doCookie[chave]) {
         try {
           var antigo = localStorage.getItem(chave);
-          if (antigo) { doCookie = padronizar(chave, antigo); gravarCookie(chave, doCookie); }
+          if (antigo) { doCookie[chave] = padronizar(chave, antigo); gravarCookie(chave, doCookie[chave]); }
         } catch (e) {}
       }
+    });
 
+    var urlUtm = {}, temUtm = false;
+    UTMS.forEach(function (chave) {
+      urlUtm[chave] = padronizar(chave, daUrl(chave));
+      if (urlUtm[chave]) temUtm = true;
+    });
+
+    var interna        = urlUtm.utm_source === ORIGEM_INTERNA;
+    var cookieExterno  = doCookie.utm_source && doCookie.utm_source !== ORIGEM_INTERNA;
+    var trocarConjunto = temUtm && !(interna && cookieExterno);
+
+    UTMS.forEach(function (chave) {
+      if (trocarConjunto) {
+        if (urlUtm[chave]) gravarCookie(chave, urlUtm[chave]); else apagarCookie(chave);
+        VALORES[chave] = urlUtm[chave] || '';
+      } else {
+        VALORES[chave] = doCookie[chave] || '';
+      }
+    });
+
+    IDS.forEach(function (chave) {
+      var daUrlAgora = padronizar(chave, daUrl(chave));
       if (daUrlAgora) gravarCookie(chave, daUrlAgora);
-      VALORES[chave] = daUrlAgora || doCookie || '';
+      VALORES[chave] = daUrlAgora || doCookie[chave] || '';
     });
 
     // extras úteis para o CRM

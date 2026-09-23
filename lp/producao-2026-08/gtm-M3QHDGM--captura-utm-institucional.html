@@ -21,8 +21,11 @@
   var DOMINIO_COOKIE = '.fotus.com.br';   // o ponto na frente é o que faz atravessar para energia.fotus.com.br
   var DIAS_COOKIE    = 90;
 
-  var CHAVES = ['utm_source','utm_medium','utm_campaign','utm_term','utm_content',
-                'gclid','gbraid','wbraid','fbclid'];
+  var UTMS = ['utm_source','utm_medium','utm_campaign','utm_term','utm_content'];
+  var IDS  = ['gclid','gbraid','wbraid','fbclid'];
+
+  // utm_source dos links do próprio site (banners da home). Mesma regra da tag da LP.
+  var ORIGEM_INTERNA = 'site';
 
   function lerCookie(nome) {
     var m = document.cookie.match(new RegExp('(^| )' + nome + '=([^;]+)'));
@@ -33,6 +36,11 @@
     var exp = new Date(Date.now() + (dias || DIAS_COOKIE) * 864e5).toUTCString();
     document.cookie = nome + '=' + encodeURIComponent(valor) +
       ';expires=' + exp + ';path=/;domain=' + DOMINIO_COOKIE + ';SameSite=Lax';
+  }
+  function apagarCookie(nome) {
+    var passado = ';expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/';
+    document.cookie = nome + '=' + passado + ';domain=' + DOMINIO_COOKIE;
+    document.cookie = nome + '=' + passado;   // versão sem domínio, de implementações antigas
   }
   function daUrl(nome) {
     var qs = new URLSearchParams(location.search);
@@ -61,8 +69,26 @@
     return String(valor).trim();
   }
 
-  /* Guarda o que veio na URL. O clique de agora sempre vence o cookie antigo. */
-  CHAVES.forEach(function (chave) {
+  /* UTM é um CONJUNTO: se a URL trouxe qualquer utm_*, troca o conjunto inteiro
+     (o que não veio é apagado). Exceção: UTM interna (utm_source=site) não
+     sobrescreve origem externa que já esteja no cookie — o anúncio não perde
+     o lead para o banner. O GA4 continua lendo a UTM do banner direto da URL. */
+  var urlUtm = {}, temUtm = false;
+  UTMS.forEach(function (chave) {
+    urlUtm[chave] = padronizar(chave, daUrl(chave));
+    if (urlUtm[chave]) temUtm = true;
+  });
+  var origemCookie  = lerCookie('utm_source');
+  var interna       = urlUtm.utm_source === ORIGEM_INTERNA;
+  var cookieExterno = origemCookie && origemCookie !== ORIGEM_INTERNA;
+  if (temUtm && !(interna && cookieExterno)) {
+    UTMS.forEach(function (chave) {
+      if (urlUtm[chave]) gravarCookie(chave, urlUtm[chave]); else apagarCookie(chave);
+    });
+  }
+
+  /* IDs de clique: valor a valor, o da URL vence o cookie. */
+  IDS.forEach(function (chave) {
     var valor = padronizar(chave, daUrl(chave));
     if (valor) gravarCookie(chave, valor);
   });

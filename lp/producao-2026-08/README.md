@@ -19,6 +19,10 @@ auditoria de ago/2026 (ver `docs/14-captura-utm-e-tracking-2026-08.md`).
    `id="form-field-x"`.** Seletor `[name="x"]` não casa com nada.
 3. **Prioridade da UTM: URL > cookie (90d) > vazio.** Nunca first-touch sem
    expiração — o formulário passa a enviar para sempre a primeira UTM vista.
+   **Desde 23/set:** UTM é um CONJUNTO (URL com qualquer `utm_*` troca tudo e
+   apaga o que não veio — nunca mesclar com o cookie velho) e `utm_source=site`
+   (banners da home) é origem interna: não sobrescreve origem externa no cookie.
+   Os banners PRECISAM manter a UTM (medição mensal de clique no GA4).
 4. **A tabela de normalização** (`facebook→meta`, `paid_social→paid-social`, etc.)
    existe nas duas tags de GTM. Se mudar numa, mude na outra.
 5. **Não reativar** o snippet WPCode 8619 `tracking fop` — é duplicata da tag do

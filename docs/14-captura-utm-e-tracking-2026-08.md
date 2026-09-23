@@ -88,6 +88,10 @@ Ficou **só com o que é experiência de formulário**: CSS, máscara de CNPJ e 
 | 8 | **Cinco lugares com código de captura.** | Consolidado em **duas tags de GTM**, uma por container. | ✅ 25/ago |
 | 9 | **Duas properties GA4 medindo o mesmo tráfego** (`G-CLTDDN2TLB` e `G-X0GG5MP2N3`), com o **mesmo evento** `generate_lead` mandado para as duas. | Oficial = `G-CLTDDN2TLB`. A outra foi desligada. ETL passou a ler só ela. | ✅ 25/ago |
 | 10 | **`leads` do GA4 vinha de `metrics.conversions`**, que é *todos os key events somados*, não `generate_lead`. Dava 158 num dia em que o FOP registrou 14. | GA4 **não alimenta mais `leads`** (grava 0). O valor bruto foi para `conversoes_custom.keyEvents`. | ✅ 25/ago |
+| 11 | **UTM mesclada parâmetro a parâmetro.** Uma URL com só 3 UTMs trocava 3 cookies e deixava `utm_term`/`utm_content` de uma visita antiga. Achado num lead de teste do Igor: card com `site / botao / seja_um_integrado` + `rmkt` + ID de anúncio Meta (`120245342548070638`, vindo de 25/ago). | UTM passou a ser um **conjunto**: se a URL traz qualquer `utm_*`, o conjunto inteiro é trocado e o que não veio é apagado. IDs de clique seguem valor a valor. | ✅ 23/set |
+| 12 | **Banner interno roubava o lead do anúncio.** Os banners HTML da home levam `utm_source=site&utm_medium=banner_home…` (necessário: é assim que o Igor mede clique de banner no GA4 todo mês). Jornada anúncio → home → banner → LP saía como `site / banner_home`. | `utm_source=site` = **origem interna**: só grava se o cookie não tiver origem externa. O GA4 continua lendo a UTM do banner direto da URL, então o report de cliques não muda. | ✅ 23/set |
+
+**Publicação de 23/set:** `GTM-M3QHDGM` versão 38 e `GTM-5KKTF798` versão 73 (mesmo nome de versão nos dois). Validado com 7 cenários simulados e 3 ao vivo num navegador limpo (anúncio → banner mantém `meta`; UTM parcial zera term/content; banner sozinho grava `site/banner_home`). Cookies gravados **antes** de 23/set não são corrigidos — navegador de teste precisa ser anônimo.
 
 ---
 
